@@ -1,0 +1,19 @@
+id: ops-tui
+name: OPS-TUI
+version: 1.0.0
+date: 2026-05-04
+
+description: >
+  Terminal-first control system for power users.
+  Combines automation, device control, and scripting in a Rust TUI.
+
+tech:
+  language: Rust
+  ui: ratatui
+  runtime: tokio
+
+goals:
+  - fast execution
+  - keyboard-first UX
+  - modular architecture
+  - extensibility via plugins
