@@ -1,80 +1,40 @@
 mod app;
-mod theme;
-mod layout;
 mod components;
+mod engine;
+mod event;
+mod layout;
 mod services;
+mod theme;
+mod tui;
 
-use crate::app::App;
-use crossterm::{
-    event::{self as terminal_event, Event, KeyCode},
-    execute,
-    terminal::{disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen},
-};
-use ratatui::{
-    backend::CrosstermBackend,
-    layout::{Constraint, Direction, Layout},
-    widgets::{Block, Borders},
-    Terminal,
-};
-use std::io;
-use std::time::Duration;
+use anyhow::Result;
+use app::{Action, App};
+use engine::Executor;
+use event::EventStream;
+use tokio::sync::mpsc;
 
-fn main() -> io::Result<()> {
-    enable_raw_mode()?;
-
-    let mut stdout = io::stdout();
-    execute!(stdout, EnterAlternateScreen)?;
-
-    let backend = CrosstermBackend::new(stdout);
-    let mut terminal = Terminal::new(backend)?;
-
-    let result = run(&mut terminal);
-
-    disable_raw_mode()?;
-    execute!(terminal.backend_mut(), LeaveAlternateScreen)?;
-    terminal.show_cursor()?;
-
-    result
-}
-
-fn run(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>) -> io::Result<()> {
+#[tokio::main]
+async fn main() -> Result<()> {
     let mut app = App::new();
+    let mut terminal = tui::TerminalSession::enter()?;
+    let (event_tx, mut event_rx) = mpsc::unbounded_channel();
 
-    loop {
-        terminal.draw(|frame| render(frame, &app))?;
+    let _events = EventStream::start(event_tx.clone());
+    let executor = Executor::new(event_tx);
 
-        if terminal_event::poll(Duration::from_millis(250))? {
-            if let Event::Key(key) = terminal_event::read()? {
-                match key.code {
-                    KeyCode::Char('q') => break,
-                    KeyCode::Backspace => {
-                        app.command_input.pop();
-                    }
-                    KeyCode::Enter => app.run_command(),
-                    _ => app.handle_key(key),
-                }
-            }
+    terminal.draw(&app)?;
+
+    while let Some(event) = event_rx.recv().await {
+        let action = app.update(event);
+
+        match action {
+            Action::None => {}
+            Action::Quit => break,
+            Action::RunCommand(command) => executor.run_command(command),
         }
+
+        terminal.draw(&app)?;
     }
 
     Ok(())
-}
-
-fn render(frame: &mut ratatui::Frame<'_>, app: &App) {
-    let areas = layout::main_layout(frame.area());
-    let body = Layout::default()
-        .direction(Direction::Horizontal)
-        .constraints([Constraint::Length(24), Constraint::Min(1)])
-        .split(areas[0]);
-
-    let sidebar = components::sidebar::render_sidebar(&["scripts", "logs"], 0)
-        .block(Block::default().title("OPS-TUI").borders(Borders::ALL));
-    let logs = components::logs::render_logs(&app.logs)
-        .block(Block::default().title("Logs").borders(Borders::ALL));
-    let command = components::commands::render_command(&app.command_input)
-        .block(Block::default().title("Command").borders(Borders::ALL));
-
-    frame.render_widget(sidebar, body[0]);
-    frame.render_widget(logs, body[1]);
-    frame.render_widget(command, areas[1]);
 }
