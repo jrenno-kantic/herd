@@ -48,7 +48,30 @@
           resumes next time), draws a "shutting down…" frame before waiting,
           and every step is bounded.
 
-- [ ] update rust toolchain to lastest stable one
-- [ ] add a robust software versioning feature (increment at release build)
+- [x] update rust toolchain to lastest stable one → 1.95.0 → **1.97.1**,
+      green on build/test/clippy. Pinned with `rust-toolchain.toml`
+      (`channel = "stable"`) and `rust-version = "1.97"` in Cargo.toml.
+      Edition stays 2021 on purpose: edition 2024 makes `env::set_var`
+      unsafe, which the config-resolution tests use — a separate,
+      deliberate migration rather than a side effect of this.
+- [x] add a robust software versioning feature (increment at release build)
+    - `build.rs` stamps every binary with its commit and commit date, so
+      builds between releases are still distinguishable. A dirty tree is
+      marked `-dirty`.
+    - `herd --version` → `herd 0.1.0 (a1b2c3d 2026-08-11)`; the sidebar
+      shows `HERD 0.1.0`, with `*` when the build came from a dirty tree.
+    - `make release` / `release-minor` / `release-major` verify, bump, tag
+      and build. `VERSION=x.y.z make release` sets it outright.
+    - **Not** auto-incremented on every release build, deliberately: a
+      build script rewriting Cargo.toml dirties the tree on each
+      `cargo build --release`, invalidates its own fingerprint and rebuilds
+      in a loop, and numbers builds rather than releases. The commit stamp
+      is what identifies an individual build.
+
+- [x] fix model column spec as MTP has disappeared → **SPEC** is back as its
+      own column, and now outlives CAPS when the terminal narrows: `S` says
+      only *whether* speculative decoding is on, SPEC says which head.
+- [ ] split model description and keys usage on 2 lines (instead of one)
+- [ ] disable "enter launch" when model is already started/serving in server screen
 
 - [ ] how to optimize running memory and CPU consumption
