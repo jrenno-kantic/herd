@@ -8,27 +8,47 @@
 //! `None` and is never flagged, because a wrong red warning is worse than
 //! no warning.
 
-/// Bytes per weight for the quantisations that appear in the shipped
-/// presets. `UD-Q4_K_XL` and friends land a little above their nominal
-/// bit-width, hence 4.8 rather than 4.0.
-fn bits_per_weight(tag: &str) -> f64 {
+/// Bits per weight, or `None` when the quantisation is not recognised.
+///
+/// The `_K_XL`-style variants land a little above their nominal bit-width,
+/// hence 4.8 rather than 4.0.
+///
+/// **An unknown tag returns `None` rather than assuming Q4.** The old
+/// fallback did assume it, which is how `prism-ml/Bonsai-27B-gguf:Q1_0`
+/// came to be announced at 16.1 GiB against a real file of 3.5: `Q1_0`
+/// matched nothing, fell through to 4.8 bits and was sized as though it
+/// were a Q4. Guessing a bit-width is guessing the answer — a preset that
+/// cannot be sized reports nothing, exactly as one with no parseable
+/// parameter count does.
+fn bits_per_weight(reference: &str) -> Option<f64> {
+    // The quantisation is the tag after `:` where there is one. Searching
+    // the whole reference would let a model *name* decide the answer: a
+    // repo called `...-Q8-distill` has no bearing on how its `:Q4_K_M`
+    // build is stored.
+    let tag = super::hub::split_repo(reference).1.unwrap_or(reference);
     let tag = tag.to_ascii_uppercase();
-    if tag.contains("F16") || tag.contains("BF16") {
-        16.0
-    } else if tag.contains("Q8") {
-        8.5
-    } else if tag.contains("Q6") {
-        6.6
-    } else if tag.contains("Q5") {
-        5.5
-    } else if tag.contains("Q3") {
-        3.9
-    } else if tag.contains("Q2") {
-        2.8
-    } else {
-        // Q4 and anything unrecognised: Q4_K is by far the common case.
-        4.8
-    }
+
+    // `IQ<n>` variants fall out of this for free, since `IQ4_NL` contains
+    // `Q4`. Checked in descending width so no entry shadows a wider one.
+    const WIDTHS: [(&str, f64); 10] = [
+        ("F32", 32.0),
+        ("BF16", 16.0),
+        ("F16", 16.0),
+        ("Q8", 8.5),
+        ("Q6", 6.6),
+        ("Q5", 5.5),
+        ("Q4", 4.8),
+        ("Q3", 3.9),
+        ("Q2", 2.8),
+        // Measured, not nominal: Bonsai-27B-Q1_0.gguf is 3.54 GiB for
+        // 27B weights, which is 1.13 bits each.
+        ("Q1", 1.2),
+    ];
+
+    WIDTHS
+        .iter()
+        .find(|(needle, _)| tag.contains(needle))
+        .map(|(_, bits)| *bits)
 }
 
 /// Runtime cost beyond the weights: KV cache at a typical context, plus
@@ -81,9 +101,15 @@ pub fn parameters_b(text: &str) -> Option<f64> {
 }
 
 /// Estimated resident size of a preset, in GiB.
+///
+/// `None` when either half is unreadable — an unparseable parameter count
+/// or an unrecognised quantisation. Both render as `-` and `Fit::Unknown`
+/// rather than as a number nobody should act on.
 pub fn estimate_gib(repo: &str) -> Option<f64> {
     let params = parameters_b(repo)?;
-    let weights = params * 1e9 * bits_per_weight(repo) / 8.0 / BYTES_PER_GIB;
+    let bits = bits_per_weight(repo)?;
+
+    let weights = params * 1e9 * bits / 8.0 / BYTES_PER_GIB;
     Some(weights + RUNTIME_OVERHEAD_GIB)
 }
 
@@ -183,6 +209,58 @@ mod tests {
             parameters_b("unsloth/gemma-4-26B-A4B-it-qat-GGUF"),
             Some(26.0)
         );
+    }
+
+    /// The bug this replaced: `Q1_0` matched no branch, fell through to a
+    /// Q4-shaped default and was sized at 16.1 GiB against a real file of
+    /// 3.54 GiB. The estimate adds a runtime allowance on top of the
+    /// weights, so it lands near 4.5, not on the file size itself.
+    #[test]
+    fn a_one_bit_quantisation_is_not_sized_as_a_four_bit_one() {
+        let estimate = estimate_gib("prism-ml/Bonsai-27B-gguf:Q1_0").expect("sizeable");
+
+        // Bonsai-27B-Q1_0.gguf really is 3.54 GiB; allow the weights part
+        // to land within half a gigabyte of that.
+        let weights = estimate - RUNTIME_OVERHEAD_GIB;
+        assert!(
+            (weights - 3.54).abs() < 0.5,
+            "weights estimated at {weights:.2} GiB against a real 3.54"
+        );
+        assert!(estimate < 6.0, "still sized like a Q4: {estimate:.1} GiB");
+    }
+
+    /// Guessing a bit-width is guessing the answer. An unrecognised
+    /// quantisation reports nothing, exactly as an unparseable parameter
+    /// count does.
+    #[test]
+    fn an_unknown_quantisation_is_not_assumed_to_be_q4() {
+        assert_eq!(estimate_gib("vendor/Model-27B-GGUF:MXFP4"), None);
+        assert_eq!(estimate_gib("vendor/Model-27B-GGUF:BITNET"), None);
+        // No tag at all is equally unsizeable.
+        assert_eq!(estimate_gib("vendor/Model-27B-GGUF"), None);
+    }
+
+    /// The quantisation comes from the tag, not the model name — a repo
+    /// whose *name* mentions a width must not override the build's own.
+    #[test]
+    fn the_tag_decides_the_width_not_the_model_name() {
+        let named = estimate_gib("vendor/Model-Q8-distill-27B-GGUF:Q1_0").expect("sizeable");
+        let plain = estimate_gib("vendor/Model-27B-GGUF:Q1_0").expect("sizeable");
+
+        assert!((named - plain).abs() < 0.01, "the name changed the answer");
+    }
+
+    /// `IQ4_NL`, `UD-IQ2_M`, `TQ2_0` and friends fall out of the same
+    /// table: the `Q<n>` inside them is the width, and landing near it
+    /// beats reporting nothing.
+    #[test]
+    fn the_i_quant_and_ternary_variants_are_recognised() {
+        for tag in ["IQ4_NL", "UD-IQ2_M", "TQ2_0", "IQ1_S"] {
+            assert!(
+                estimate_gib(&format!("unsloth/Qwen3.5-9B-GGUF:{tag}")).is_some(),
+                "{tag} was not recognised"
+            );
+        }
     }
 
     /// Quantisation tags contain digits too; none of them may be mistaken
