@@ -1,0 +1,11 @@
+# The toolchain this project is built and tested with.
+#
+# `stable` rather than a pinned version: herd has no nightly features and
+# no version-sensitive dependencies, so tracking stable costs nothing and
+# means a fresh checkout never starts on whatever happened to be installed.
+# `rust-version` in Cargo.toml records the floor that has actually been
+# verified, so an older toolchain fails with a clear message rather than a
+# confusing compile error.
+[toolchain]
+channel = "stable"
+components = ["rustfmt", "clippy"]
