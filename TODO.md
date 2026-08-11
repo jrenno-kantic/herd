@@ -105,5 +105,30 @@
       Every preset is sized that way.
 
 - [x] why gemma4-31b is indicated as not present locally, but the download seems to fail silently
-- [ ] fix when stop (s) is pressed while downloading a model, in that case reset the state as the app stay in error status
-- [ ] how to optimize running memory and CPU consumption
+- [x] fix a bug when stop (s) is pressed while downloading a model, in that
+      case reset the state as the app stay in error status → two causes:
+    - **A race in the health poller.** It checked "is this launch still
+      current", then spent up to the 3s health timeout waiting for a reply.
+      A stop landing in that window announced OFF, and the poller then
+      emitted on top of it — mid-download, an error about nothing
+      listening. Reproduced with a listener that accepts and never answers:
+      `[Starting, Stopping, Off, Starting]`. It now re-checks before
+      emitting.
+    - **No way out of ERROR.** `s` did nothing, because `is_live()` is
+      false for a failed server, so the state outlived the failure it
+      described. `s` now clears it — purely local, since nothing is
+      running to stop.
+- [x] how to optimize running memory and CPU consumption → **measured
+      first, and mostly the answer is "it already is".**
+    - Idle footprint: **10.5 MB RSS, stable**, against a llama-server
+      holding 8–17 GiB. Not worth attacking.
+    - Idle CPU was **80 ms per 30 s** — the 250 ms tick forcing ~120 full
+      redraws of a screen that had not changed. A tick now only redraws
+      when a clock is actually on screen (`App::ticking`): **80 ms → 30 ms**,
+      reproducible over two runs.
+    - Tried and **reverted**: trimming tokio to the features herd uses.
+      Identical binary size, RSS and thread count — Cargo unifies features
+      across reqwest anyway, so it bought nothing and the diff was noise.
+    - Left alone: the 50 ms keyboard poll (raising it trades input latency
+      for a few wakeups) and the 17 runtime threads (they cost virtual
+      address space, not RSS). Neither is justified by the measurements.

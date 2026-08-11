@@ -15,8 +15,7 @@ AGENT.md
 target
 **/*.rs.bk
 # Cargo.lock IS committed: this is a binary crate, and the lock file
-# is what makes a build reproducible against the exact ratatui /
-# reqwest / tokio versions it was tested with.
+# is what makes a build reproducible against the exact dependency versions it was tested with.
 
 # Python / uv (uv.lock IS committed: it's the pinned environment the
 __pycache__/
