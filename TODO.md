@@ -85,5 +85,23 @@
       **The Models screen deliberately still relaunches**: pressing Enter
       there after changing a setting is how a session override is applied.
 
-- [ ] fix bonsai-27b (16gb tier) that announce 16.1G instead of 3.5G 
+- [x] add MTP in detialled model description line (Models screen) → the
+      footer now reads `speculative decoding (mtp)`. The mechanism is
+      carried on the trait itself (`caps::Trait::detail`) rather than
+      special-cased in the renderer, and the `draft-` prefix is stripped
+      since it is llama.cpp grouping, not information.
+- [x] fix bonsai-27b (16gb tier) that announce 16.1G instead of 3.5G →
+      **16.1G → 4.8G.** `Q1_0` matched no branch in `bits_per_weight` and
+      fell through to a Q4-shaped default of 4.8 bits/weight, sizing a
+      1-bit model as a 4-bit one. Q1 is now in the table at 1.2 bits
+      (measured: `Bonsai-27B-Q1_0.gguf` is 3.54 GiB for 27B weights).
+    - The real fix is the one behind it: **an unrecognised quantisation now
+      reports nothing** instead of assuming Q4. Guessing a bit-width is
+      guessing the answer, and the module already promised not to.
+    - The width is read from the tag after `:`, not the whole reference, so
+      a repo whose *name* mentions a width cannot override its build's.
+    - Note 4.8G, not 3.5G: 3.54 is the file on disk, and the estimate adds
+      the documented ~1 GiB runtime allowance on top of the weights.
+      Every preset is sized that way.
+
 - [ ] how to optimize running memory and CPU consumption
