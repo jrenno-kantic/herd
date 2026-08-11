@@ -102,10 +102,14 @@ do-release:
 		exit 1; }
 	@$(MAKE) --no-print-directory verify
 	@current=$$(awk -F\" '/^version = /{print $$2; exit}' Cargo.toml); \
-	 next=$${VERSION:-$$(echo $$current | awk -F. -v part=$(BUMP) '{ \
-	    if (part=="major") printf "%d.0.0", $$1+1; \
-	    else if (part=="minor") printf "%d.%d.0", $$1, $$2+1; \
-	    else printf "%d.%d.%d", $$1, $$2, $$3+1 }')); \
+	 if [ -n "$$VERSION" ]; then \
+	   next="$$VERSION"; \
+	 else \
+	   next=$$(printf '%s\n' "$$current" | awk -F. -v part=$(BUMP) 'BEGIN { OFS="." } \
+	      part=="major" { print $$1+1, 0, 0; next } \
+	      part=="minor" { print $$1, $$2+1, 0; next } \
+	                    { print $$1, $$2, $$3+1 }'); \
+	 fi; \
 	 echo "$(BLUE)Releasing $$current -> $$next$(RESET)"; \
 	 sed -i.bak "1,/^version = /s/^version = \".*\"/version = \"$$next\"/" Cargo.toml && rm -f Cargo.toml.bak; \
 	 cargo check --quiet; \
