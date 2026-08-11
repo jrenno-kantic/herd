@@ -104,7 +104,12 @@ fn table(frame: &mut Frame, app: &App, area: Rect) {
         .constraints([
             Constraint::Length(1),
             Constraint::Min(1),
-            Constraint::Length(1),
+            // Two: what the highlighted preset *is*, then what the keys
+            // do. Sharing one line meant the description pushed the key
+            // hints off the right edge — and the description is the half
+            // that grows, since it now spells out optimisations and
+            // capabilities.
+            Constraint::Length(2),
         ])
         .split(inner)
         .to_vec();
@@ -120,7 +125,16 @@ fn table(frame: &mut Frame, app: &App, area: Rect) {
         Paragraph::new(Line::styled(columns.header(), Theme::border())),
         chunks[0],
     );
-    frame.render_widget(Paragraph::new(footer(app)).style(Theme::logs()), chunks[2]);
+    frame.render_widget(
+        Paragraph::new(vec![
+            Line::styled(format!("  {}", describes(app)), Theme::logs()),
+            Line::styled(
+                format!("  {}", keys::screen_hint(Screen::Models)),
+                Theme::logs(),
+            ),
+        ]),
+        chunks[2],
+    );
 
     let rows = app.llama.rows();
 
@@ -371,7 +385,11 @@ fn lifecycle_glyph(state: &ServerState, is_active: bool) -> char {
     }
 }
 
-fn footer(app: &App) -> String {
+/// What the highlighted preset is: the machine's memory, any overrides in
+/// force, a fit warning, and the row's optimisations and capabilities in
+/// words — which is also the legend for the compact OPT/CAPS columns, and
+/// explains itself by sitting under the letters it decodes.
+fn describes(app: &App) -> String {
     if app.mode == Mode::Filter {
         return format!("/{}▏", app.llama.filter);
     }
@@ -396,16 +414,7 @@ fn footer(app: &App) -> String {
         None => String::new(),
     };
 
-    // The compact OPT/CAPS columns are legible once you know them, and
-    // opaque until then. Spelling out the selected row is the legend —
-    // it costs no extra line, and it explains itself by sitting next to
-    // the letters it decodes.
-    let spelled = describe(app);
-
-    format!(
-        "RAM {ram}{overrides}{fit}{spelled}   {}",
-        keys::screen_hint(Screen::Models)
-    )
+    format!("RAM {ram}{overrides}{fit}{}", describe(app))
 }
 
 /// The selected preset's optimisations and capabilities, in words.
