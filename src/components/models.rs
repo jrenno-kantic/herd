@@ -4,7 +4,7 @@
 use crate::{
     app::{App, Mode, Screen},
     components, keys,
-    services::llama::{hub::Availability, Fit, ServerState},
+    services::llama::{caps, hub::Availability, Fit, ServerState},
     theme::Theme,
 };
 use ratatui::layout::{Constraint, Direction, Layout, Rect};
@@ -109,14 +109,15 @@ fn table(frame: &mut Frame, app: &App, area: Rect) {
         .split(inner)
         .to_vec();
 
+    // Chosen from the width actually available, not assumed: the fixed
+    // layout this replaces was already 89 columns wide, so on a
+    // 100-column terminal — 74 for this pane once the sidebar and borders
+    // are taken — the last columns were being clipped off the right edge
+    // with nothing to say they existed.
+    let columns = Columns::for_width(chunks[0].width as usize);
+
     frame.render_widget(
-        Paragraph::new(Line::styled(
-            format!(
-                "  {:<22} {:<30} {:>7} {:>6} {:>10}  {}",
-                "NAME", "REPO", "CTX", "RAM", "LOCAL", "SPEC"
-            ),
-            Theme::border(),
-        )),
+        Paragraph::new(Line::styled(columns.header(), Theme::border())),
         chunks[0],
     );
     frame.render_widget(Paragraph::new(footer(app)).style(Theme::logs()), chunks[2]);
@@ -155,14 +156,15 @@ fn table(frame: &mut Frame, app: &App, area: Rect) {
         let availability = app.llama.availability(&row.name);
         let local = availability.label().unwrap_or("");
 
-        let text = format!(
-            "{marker}{:<22} {:<30} {:>7} {:>6} {:>10}  {}",
-            row.name,
-            truncate(&row.repo, 30),
-            row.ctx,
-            estimate,
+        let text = columns.row(
+            &marker,
+            &row.name,
+            &row.repo,
+            &row.ctx,
+            &estimate,
+            &caps::tokens(&app.llama.optimisations(&row.name)),
+            &caps::letters(&app.llama.capabilities(&row.name)),
             local,
-            row.spec
         );
 
         // A preset the machine cannot hold is called out in red even when
@@ -182,6 +184,158 @@ fn table(frame: &mut Frame, app: &App, area: Rect) {
     // and `render` stays a pure function of `App` — no draw-time mutation.
     let mut state = ListState::default().with_selected(Some(app.llama.cursor.min(rows.len() - 1)));
     frame.render_stateful_widget(List::new(items), chunks[1], &mut state);
+}
+
+/// Which columns fit, given the width the table actually got.
+///
+/// The table has outgrown any fixed layout: name, repo, context, memory,
+/// optimisations, capabilities and local availability do not all fit on a
+/// narrow terminal, and silently clipping the right-hand ones is the worst
+/// of the options — the reader cannot tell a column that says nothing from
+/// one that has been cut off.
+///
+/// So the least load-bearing columns are dropped instead, in a stated
+/// order, and the repo column absorbs whatever is left over.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct Columns {
+    repo: usize,
+    ctx: bool,
+    ram: bool,
+    opt: bool,
+    caps: bool,
+}
+
+/// Fixed widths. `repo` is the only elastic one.
+const W_NAME: usize = 22;
+const W_CTX: usize = 7;
+const W_RAM: usize = 6;
+const W_OPT: usize = 10;
+const W_CAPS: usize = 5;
+const W_LOCAL: usize = 9;
+const W_MARKER: usize = 2;
+const REPO_MIN: usize = 12;
+const REPO_MAX: usize = 30;
+
+impl Columns {
+    /// Everything on, repo at its widest.
+    fn full() -> Self {
+        Self {
+            repo: REPO_MAX,
+            ctx: true,
+            ram: true,
+            opt: true,
+            caps: true,
+        }
+    }
+
+    fn width(&self) -> usize {
+        // marker, name and local are never dropped: without them a row
+        // cannot be identified, and "not local" is the difference between
+        // a launch that takes a second and one that takes twenty minutes.
+        let mut total = W_MARKER + W_NAME + 1 + self.repo + 1 + W_LOCAL;
+
+        for (shown, width) in [
+            (self.ctx, W_CTX),
+            (self.ram, W_RAM),
+            (self.opt, W_OPT),
+            (self.caps, W_CAPS),
+        ] {
+            if shown {
+                total += width + 1;
+            }
+        }
+        total
+    }
+
+    /// Fits the table to `width`, shrinking the repo column first and then
+    /// dropping columns in increasing order of usefulness.
+    fn for_width(width: usize) -> Self {
+        let mut columns = Self::full();
+
+        // Give the repo column back whatever is spare, before anything is
+        // dropped — a wide terminal should show more repo, not more space.
+        while columns.width() > width && columns.repo > REPO_MIN {
+            columns.repo -= 1;
+        }
+
+        // Context size and the optimisation tokens are the first to go:
+        // both are visible in the argv preview below, where the memory
+        // estimate and the availability are not.
+        for drop in [Drop::Ctx, Drop::Opt, Drop::Caps, Drop::Ram] {
+            if columns.width() <= width {
+                break;
+            }
+            match drop {
+                Drop::Ctx => columns.ctx = false,
+                Drop::Opt => columns.opt = false,
+                Drop::Caps => columns.caps = false,
+                Drop::Ram => columns.ram = false,
+            }
+        }
+
+        while columns.width() < width && columns.repo < REPO_MAX {
+            columns.repo += 1;
+        }
+
+        columns
+    }
+
+    fn header(&self) -> String {
+        self.row(
+            &" ".repeat(W_MARKER),
+            "NAME",
+            "REPO",
+            "CTX",
+            "RAM",
+            "OPT",
+            "CAPS",
+            "LOCAL",
+        )
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn row(
+        &self,
+        marker: &str,
+        name: &str,
+        repo: &str,
+        ctx: &str,
+        ram: &str,
+        opt: &str,
+        caps: &str,
+        local: &str,
+    ) -> String {
+        let mut line = format!(
+            "{marker}{:<W_NAME$} {:<width$}",
+            truncate(name, W_NAME),
+            truncate(repo, self.repo),
+            width = self.repo
+        );
+
+        if self.ctx {
+            line.push_str(&format!(" {ctx:>W_CTX$}"));
+        }
+        if self.ram {
+            line.push_str(&format!(" {ram:>W_RAM$}"));
+        }
+        if self.opt {
+            line.push_str(&format!(" {:>W_OPT$}", truncate(opt, W_OPT)));
+        }
+        if self.caps {
+            line.push_str(&format!(" {:>W_CAPS$}", truncate(caps, W_CAPS)));
+        }
+        line.push_str(&format!(" {local:>W_LOCAL$}"));
+
+        line
+    }
+}
+
+/// The order columns are given up in, least useful first.
+enum Drop {
+    Ctx,
+    Opt,
+    Caps,
+    Ram,
 }
 
 /// Marker shown against a preset row.
@@ -226,10 +380,37 @@ fn footer(app: &App) -> String {
         None => String::new(),
     };
 
+    // The compact OPT/CAPS columns are legible once you know them, and
+    // opaque until then. Spelling out the selected row is the legend —
+    // it costs no extra line, and it explains itself by sitting next to
+    // the letters it decodes.
+    let spelled = describe(app);
+
     format!(
-        "RAM {ram}{overrides}{fit}   {}",
+        "RAM {ram}{overrides}{fit}{spelled}   {}",
         keys::screen_hint(Screen::Models)
     )
+}
+
+/// The selected preset's optimisations and capabilities, in words.
+fn describe(app: &App) -> String {
+    let Some(name) = app.llama.selected_model() else {
+        return String::new();
+    };
+
+    let mut parts: Vec<String> = app
+        .llama
+        .optimisations(&name)
+        .iter()
+        .map(|opt| opt.label().to_string())
+        .collect();
+    parts.extend(app.llama.capabilities(&name).iter().map(|t| t.label()));
+
+    if parts.is_empty() {
+        String::new()
+    } else {
+        format!(" · {}", parts.join(" · "))
+    }
 }
 
 fn preview(app: &App) -> Paragraph<'static> {
@@ -278,6 +459,104 @@ fn block(title: String) -> Block<'static> {
         .title(Span::styled(title, Theme::normal()))
         .borders(Borders::ALL)
         .border_style(Theme::border())
+}
+
+#[cfg(test)]
+mod column_tests {
+    use super::*;
+
+    /// The pane width on a 120-column terminal, once the 24-column sidebar
+    /// and the block borders are taken.
+    const WIDE: usize = 120 - 24 - 2;
+    /// ...and on a 100-column one, which the old fixed layout overflowed.
+    const NARROW: usize = 100 - 24 - 2;
+
+    #[test]
+    fn a_wide_terminal_shows_every_column() {
+        let columns = Columns::for_width(WIDE);
+
+        assert!(columns.ctx && columns.ram && columns.opt && columns.caps);
+        assert!(
+            columns.width() <= WIDE,
+            "still overflows: {}",
+            columns.width()
+        );
+    }
+
+    /// The point of the exercise: never wider than the pane. Clipping is
+    /// what made the old layout dishonest — a column cut off the right
+    /// edge looks identical to one with nothing to say.
+    #[test]
+    fn no_width_produces_a_row_that_overflows() {
+        // Below this nothing can fit: marker, name, the narrowest repo and
+        // the availability column are the irreducible row.
+        const FLOOR: usize = W_MARKER + W_NAME + 1 + REPO_MIN + 1 + W_LOCAL;
+        assert_eq!(Columns::for_width(0).width(), FLOOR);
+
+        for width in FLOOR..=200 {
+            let columns = Columns::for_width(width);
+            assert!(
+                columns.width() <= width,
+                "width {width} produced a {}-column row",
+                columns.width()
+            );
+        }
+    }
+
+    /// A narrow terminal gives up columns in a stated order rather than
+    /// losing whichever happened to be last.
+    #[test]
+    fn a_narrow_terminal_drops_the_least_useful_columns_first() {
+        let columns = Columns::for_width(NARROW);
+
+        assert!(columns.width() <= NARROW);
+        // Whatever else goes, the preset must remain identifiable and its
+        // availability visible — those are never dropped.
+        assert!(columns.repo >= REPO_MIN);
+        assert!(!columns.ctx, "ctx should go before ram");
+        assert!(columns.ram, "ram is the last to go");
+    }
+
+    #[test]
+    fn the_header_and_a_row_line_up() {
+        let columns = Columns::for_width(WIDE);
+        let header = columns.header();
+        let row = columns.row(
+            "▸●",
+            "gemma4-12b",
+            "unsloth/gemma-4-12B-it-qat-GGUF:UD-Q4_K_XL",
+            "32768",
+            "8.1G",
+            "qat ud",
+            "vS",
+            "not local",
+        );
+
+        assert_eq!(
+            header.chars().count(),
+            row.chars().count(),
+            "header:\n{header}\nrow:\n{row}"
+        );
+    }
+
+    /// A repo reference is longer than any sane column, so it must be
+    /// elided rather than allowed to push everything else off the line.
+    #[test]
+    fn a_long_repo_is_truncated_to_its_column() {
+        let columns = Columns::for_width(WIDE);
+        let row = columns.row(
+            "  ",
+            "n",
+            "unsloth/gemma-4-26B-A4B-it-qat-GGUF:UD-Q4_K_XL",
+            "1",
+            "1",
+            "1",
+            "1",
+            "1",
+        );
+
+        assert_eq!(row.chars().count(), columns.width());
+    }
 }
 
 #[cfg(test)]

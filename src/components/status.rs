@@ -67,6 +67,7 @@ fn hint(app: &App) -> String {
         Mode::EditPrompt => "enter use prompt · esc cancel".to_string(),
         Mode::Picker => "enter select config · esc cancel".to_string(),
         Mode::ConfirmLaunch => "y launch anyway · any other key cancel".to_string(),
+        Mode::ConfirmQuit => "y quit anyway · any other key stay".to_string(),
         Mode::Help => "any key closes the help".to_string(),
         // The globals only; the screen's own keys are in its footer, and
         // both come from the same table.
@@ -122,6 +123,7 @@ mod tests {
             Mode::EditPrompt,
             Mode::Picker,
             Mode::ConfirmLaunch,
+            Mode::ConfirmQuit,
             Mode::Help,
         ] {
             app.mode = mode;

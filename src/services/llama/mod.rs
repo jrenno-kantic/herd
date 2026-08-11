@@ -14,6 +14,7 @@
 //!   different model stops the previous process first (hot-swap).
 
 pub mod api;
+pub mod caps;
 pub mod hub;
 pub mod ini;
 pub mod memory;

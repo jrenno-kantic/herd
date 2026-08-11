@@ -19,6 +19,46 @@ use ratatui::text::Line;
 use ratatui::widgets::{Block, Borders, Clear, Paragraph};
 use ratatui::Frame;
 
+/// The exit prompt: what would be abandoned, and how to abandon it anyway.
+///
+/// Separate from the launch prompt because it answers a different question
+/// and lists live state rather than a static reason.
+pub fn render_quit(frame: &mut Frame, app: &App, area: Rect) {
+    let work = app.in_flight();
+    let popup = centered(area, 68, (work.len() + 7) as u16);
+
+    let mut lines = vec![
+        Line::from(""),
+        Line::styled(
+            "  Quitting now would abandon:".to_string(),
+            Theme::status_error(),
+        ),
+    ];
+    for item in &work {
+        lines.push(Line::styled(format!("    · {item}"), Theme::normal()));
+    }
+    lines.push(Line::from(""));
+    lines.push(Line::styled(
+        "  The server is stopped on exit either way.".to_string(),
+        Theme::logs(),
+    ));
+    lines.push(Line::styled(
+        "  Quit anyway?   [y] yes   [any other key] stay".to_string(),
+        Theme::normal(),
+    ));
+
+    frame.render_widget(Clear, popup);
+    frame.render_widget(
+        Paragraph::new(lines).style(Theme::normal()).block(
+            Block::default()
+                .title(" Work in progress ")
+                .borders(Borders::ALL)
+                .border_style(Theme::status_error()),
+        ),
+        popup,
+    );
+}
+
 pub fn render(frame: &mut Frame, app: &App, area: Rect) {
     let Some(reason) = app.llama.confirm.as_ref() else {
         return;

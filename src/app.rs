@@ -71,6 +71,8 @@ pub enum Mode {
     /// Something is already listening on the configured port and herd
     /// did not start it. Waiting for the user to confirm or cancel.
     ConfirmLaunch,
+    /// Quitting would abandon work in flight. Waiting for an answer.
+    ConfirmQuit,
     /// The `?` overlay. A mode rather than a screen so it can be summoned
     /// from anywhere and dismissed back to where the user was.
     Help,
@@ -592,6 +594,35 @@ impl LauncherState {
         llama::hub::availability(&repo, cached)
     }
 
+    /// Optimisations baked into a preset's weights.
+    pub fn optimisations(&self, name: &str) -> Vec<llama::caps::Optimisation> {
+        self.repo_of(name)
+            .map(|repo| llama::caps::optimisations(&repo))
+            .unwrap_or_default()
+    }
+
+    /// What a preset can do, and whether it is switched on.
+    ///
+    /// Both halves come from the preset itself — its repo reference and
+    /// its own keys — so a capability is never claimed on the strength of
+    /// what a model family is generally known to do.
+    pub fn capabilities(&self, name: &str) -> Vec<llama::caps::Trait> {
+        let Some(repo) = self.repo_of(name) else {
+            return Vec::new();
+        };
+        let value = |key: &str| {
+            self.config
+                .as_ref()
+                .and_then(|config| effective(config, name, &[key]))
+        };
+
+        llama::caps::capabilities(
+            &repo,
+            value("no-mmproj").is_some_and(|v| is_on(&v)),
+            value("spec-type").as_deref(),
+        )
+    }
+
     /// Which extra artifacts this preset actually uses.
     ///
     /// Read from the preset rather than assumed: `no-mmproj = true` means
@@ -1003,13 +1034,17 @@ impl App {
             Mode::EditPrompt => self.handle_prompt_key(key),
             Mode::Picker => self.handle_picker_key(key),
             Mode::ConfirmLaunch => self.handle_confirm_key(key),
+            Mode::ConfirmQuit => self.handle_quit_key(key),
             Mode::Browse => self.handle_browse_key(key),
         }
     }
 
     fn handle_browse_key(&mut self, key: KeyEvent) -> Action {
         match key.code {
-            KeyCode::Char('q') => Action::Quit,
+            KeyCode::Char('q') => self.quit(),
+            // The force variant, in the same spirit as `launch!`: the
+            // answer to the prompt, given before the prompt appears.
+            KeyCode::Char('Q') => Action::Quit,
             KeyCode::Char(':') => {
                 self.mode = Mode::Command;
                 Action::None
@@ -1455,6 +1490,54 @@ impl App {
                 Action::None
             }
             _ => Action::None,
+        }
+    }
+
+    /// Everything that would be thrown away by quitting right now, named.
+    ///
+    /// A supervised llama-server is deliberately **not** in this list: it
+    /// is stopped on exit by design, every time, and asking about the
+    /// normal case would train the user to dismiss the prompt without
+    /// reading it. Only work that would be *lost* counts.
+    pub fn in_flight(&self) -> Vec<String> {
+        let mut work = Vec::new();
+
+        if let Some(download) = &self.llama.download {
+            work.push(format!(
+                "downloading {} ({})",
+                download.model,
+                download.label()
+            ));
+        }
+        if self.llama.chat_pending {
+            work.push("a test request is waiting for the model".to_string());
+        }
+        if self.running {
+            work.push("a command is still running".to_string());
+        }
+
+        work
+    }
+
+    /// `q`: quits, or asks first when something would be lost.
+    fn quit(&mut self) -> Action {
+        if self.in_flight().is_empty() {
+            return Action::Quit;
+        }
+
+        self.mode = Mode::ConfirmQuit;
+        Action::None
+    }
+
+    fn handle_quit_key(&mut self, key: KeyEvent) -> Action {
+        self.mode = Mode::Browse;
+
+        match key.code {
+            KeyCode::Char('y') | KeyCode::Char('Y') => Action::Quit,
+            _ => {
+                self.push_log("quit cancelled");
+                Action::None
+            }
         }
     }
 
@@ -2901,6 +2984,123 @@ alias = qwen3-coder
 
         app.update(ch('s'));
         assert!(!app.running);
+    }
+
+    /// An idle app quits on `q` with no ceremony — a prompt on the normal
+    /// case would train the user to dismiss it unread.
+    #[test]
+    fn quitting_with_nothing_running_does_not_ask() {
+        let mut app = app_with_sample();
+
+        assert!(app.in_flight().is_empty());
+        assert!(matches!(app.update(ch('q')), Action::Quit));
+    }
+
+    /// A supervised server is deliberately *not* work in flight: stopping
+    /// it on exit is the documented behaviour, every time.
+    #[test]
+    fn a_running_server_alone_is_not_a_reason_to_ask() {
+        let mut app = app_with_sample();
+        app.llama.server.state = ServerState::Serving;
+
+        assert!(app.in_flight().is_empty());
+        assert!(matches!(app.update(ch('q')), Action::Quit));
+    }
+
+    #[test]
+    fn quitting_mid_download_asks_first() {
+        let mut app = app_with_sample();
+        app.update(UiEvent::DownloadProgress {
+            model: "gemma4-12b".into(),
+            done: 1_000,
+            total: 4_000,
+        });
+
+        assert!(matches!(app.update(ch('q')), Action::None));
+        assert_eq!(app.mode, Mode::ConfirmQuit);
+        assert!(app.in_flight()[0].contains("gemma4-12b"));
+
+        match app.update(ch('y')) {
+            Action::Quit => {}
+            other => panic!("y must quit, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn declining_the_quit_prompt_stays_put() {
+        let mut app = app_with_sample();
+        app.llama.chat_pending = true;
+
+        app.update(ch('q'));
+        assert_eq!(app.mode, Mode::ConfirmQuit);
+
+        assert!(matches!(app.update(ch('n')), Action::None));
+        assert_eq!(app.mode, Mode::Browse);
+    }
+
+    /// The force variant, in the same spirit as `launch!`: the answer
+    /// given before the question is asked.
+    #[test]
+    fn shift_q_quits_without_asking() {
+        let mut app = app_with_sample();
+        app.llama.chat_pending = true;
+        app.running = true;
+
+        assert!(matches!(app.update(ch('Q')), Action::Quit));
+        assert_eq!(app.mode, Mode::Browse, "no prompt should have opened");
+    }
+
+    /// Everything that would be abandoned is named, so the prompt says
+    /// what is at stake rather than just "are you sure".
+    #[test]
+    fn in_flight_names_every_kind_of_work() {
+        let mut app = app_with_sample();
+        app.running = true;
+        app.llama.chat_pending = true;
+        app.llama.download = Some(Download {
+            model: "qwen3-14b".into(),
+            done: 1,
+            total: 2,
+        });
+
+        let work = app.in_flight();
+        assert_eq!(work.len(), 3, "{work:?}");
+        assert!(work.iter().any(|w| w.contains("qwen3-14b")));
+        assert!(work.iter().any(|w| w.contains("test")));
+        assert!(work.iter().any(|w| w.contains("command")));
+    }
+
+    /// The columns describe what the ini and the repo name actually say.
+    #[test]
+    fn a_preset_reports_its_optimisations_and_capabilities() {
+        let app = App::with_config_path(shipped("32gb"));
+
+        // gemma4-12b: qat + dynamic quant, vision turned off, MTP in use.
+        let opts = app.llama.optimisations("gemma4-12b");
+        assert!(opts.contains(&llama::caps::Optimisation::Qat));
+        assert!(opts.contains(&llama::caps::Optimisation::Dynamic));
+
+        // spec-type = draft-mtp, so speculative decoding is actually on.
+        let traits = app.llama.capabilities("gemma4-12b");
+        assert!(traits
+            .iter()
+            .any(|t| t.capability == llama::caps::Capability::Speculative && t.enabled));
+
+        // ...and no vision, despite `no-mmproj = true`: the flag is set
+        // defensively across these tiers and is not evidence of a projector.
+        assert!(traits
+            .iter()
+            .all(|t| t.capability != llama::caps::Capability::Vision));
+    }
+
+    /// A preset with no repo cannot be described, and must not invent
+    /// anything to fill the columns.
+    #[test]
+    fn a_preset_without_a_repo_reports_nothing() {
+        let app = App::with_config_path(PathBuf::from("/nonexistent/models.ini"));
+
+        assert!(app.llama.optimisations("whatever").is_empty());
+        assert!(app.llama.capabilities("whatever").is_empty());
     }
 
     /// Until llama.cpp has been asked, nothing is claimed. Telling someone

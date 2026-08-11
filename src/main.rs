@@ -117,8 +117,16 @@ async fn main() -> Result<()> {
         terminal.draw(&app)?;
     }
 
+    // Say what is happening before waiting for it. Shutdown is bounded,
+    // but stopping a model that is paging can still take seconds, and a
+    // motionless final frame is indistinguishable from a hang — which is
+    // the impression this whole release set out to remove.
+    app.push_log("shutting down…");
+    let _ = terminal.draw(&app);
+
     // Best-effort but deterministic: never leave a supervised llama-server
-    // process (and the GPU memory it holds) running after herd exits.
+    // process (and the GPU memory it holds), or an `hf` download, running
+    // after herd exits.
     executor.shutdown().await;
 
     // Only the tier and the last preset — settings overrides are

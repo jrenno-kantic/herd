@@ -10,6 +10,11 @@ use tokio::sync::mpsc;
 pub struct Executor {
     tx: mpsc::UnboundedSender<UiEvent>,
     llama: Supervisor,
+    /// The `hf` process, while one is running. Held so that quitting can
+    /// stop it rather than leave it writing into the cache after the UI
+    /// has gone — `kill_on_drop` fires only once the task is dropped, and
+    /// on a clean exit nothing drops it in time.
+    download: Arc<tokio::sync::Mutex<Option<tokio::process::Child>>>,
     /// The active `models.ini`. Resolved at startup and kept in step with
     /// `App` when the user switches tier, so the Models screen and the
     /// Executor can never disagree about which file is in play.
@@ -21,6 +26,7 @@ impl Executor {
         Self {
             tx,
             llama: Supervisor::new(),
+            download: Arc::new(tokio::sync::Mutex::new(None)),
             config_path: Arc::new(RwLock::new(config_path)),
         }
     }
@@ -96,11 +102,34 @@ impl Executor {
         self.spawn_quick(command);
     }
 
-    /// Stops the supervised llama-server process, if any. Called once from
-    /// `main.rs` right after the event loop exits so quitting herd
-    /// never leaves an orphaned server holding GPU memory.
+    /// Winds everything down. Called once from `main.rs` right after the
+    /// event loop exits, so quitting never leaves an orphaned
+    /// `llama-server` holding GPU memory or an `hf` process still writing
+    /// into the model cache.
+    ///
+    /// Every step is bounded (see `Supervisor::stop`), so this cannot be
+    /// what makes the app hang on exit.
     pub async fn shutdown(&self) {
+        self.stop_download().await;
         self.llama.stop().await;
+    }
+
+    /// Kills the downloader if one is running.
+    ///
+    /// A partial download is not lost work: `hf` writes to a
+    /// `.incomplete` blob and resumes from it next time, which is exactly
+    /// why interrupting one is safe enough to do without ceremony.
+    async fn stop_download(&self) -> bool {
+        let taken = self.download.lock().await.take();
+
+        match taken {
+            Some(mut child) => {
+                let _ = child.start_kill();
+                let _ = tokio::time::timeout(DOWNLOAD_GRACE, child.wait()).await;
+                true
+            }
+            None => false,
+        }
     }
 
     /// Sends a chat probe (the `test_call.sh` equivalent) and reports the
@@ -206,7 +235,7 @@ impl Executor {
                 files.clone(),
                 total,
             );
-            let outcome = fetch(&repo, &files, &tx).await;
+            let outcome = fetch(&repo, &files, &tx, &executor.download).await;
             progress.abort();
 
             let summary = match &outcome {
@@ -408,6 +437,10 @@ impl Executor {
     }
 }
 
+/// How long to wait for the downloader to die on exit before giving up.
+/// Short: it is a well-behaved CLI, and a partial blob resumes next time.
+const DOWNLOAD_GRACE: std::time::Duration = std::time::Duration::from_secs(3);
+
 /// How often to re-measure the bytes on disk while downloading.
 const PROGRESS_INTERVAL: std::time::Duration = std::time::Duration::from_millis(500);
 
@@ -419,6 +452,7 @@ async fn fetch(
     repo: &str,
     files: &[llama::hub::RepoFile],
     tx: &mpsc::UnboundedSender<UiEvent>,
+    slot: &Arc<tokio::sync::Mutex<Option<tokio::process::Child>>>,
 ) -> Result<(), String> {
     use tokio::io::{AsyncBufReadExt, BufReader};
 
@@ -439,7 +473,14 @@ async fn fetch(
             )
         })?;
 
-    if let Some(stderr) = child.stderr.take() {
+    let stderr = child.stderr.take();
+
+    // Published before it is awaited, so a quit arriving mid-download has
+    // something to kill. Taken back out below, so `shutdown` cannot end up
+    // waiting on a process that has already been reaped here.
+    *slot.lock().await = Some(child);
+
+    if let Some(stderr) = stderr {
         let tx = tx.clone();
         tokio::spawn(async move {
             let mut lines = BufReader::new(stderr).lines();
@@ -453,6 +494,11 @@ async fn fetch(
             }
         });
     }
+
+    let Some(mut child) = slot.lock().await.take() else {
+        // `shutdown` got there first and killed it.
+        return Err(format!("{} was stopped", llama::hub::DOWNLOADER));
+    };
 
     let status = child
         .wait()

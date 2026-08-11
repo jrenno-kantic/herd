@@ -64,6 +64,9 @@ pub fn render(frame: &mut Frame, app: &App) {
     if app.mode == Mode::ConfirmLaunch {
         confirm::render(frame, app, frame.area());
     }
+    if app.mode == Mode::ConfirmQuit {
+        confirm::render_quit(frame, app, frame.area());
+    }
     if app.mode == Mode::Picker {
         picker::render(frame, app, frame.area());
     }
@@ -292,6 +295,49 @@ spec-type = draft-mtp
         app.screen = Screen::Settings;
         let text = frame_text(&app, 120, 40);
         assert!(text.contains('/'), "the Settings list has no position");
+    }
+
+    /// Quitting mid-download must say what would be abandoned, not just
+    /// ask "are you sure".
+    #[test]
+    fn the_quit_prompt_names_the_work_in_flight() {
+        let mut app = sample_app();
+        app.update(crate::event::UiEvent::DownloadProgress {
+            model: "gemma4-12b".into(),
+            done: 1_073_741_824,
+            total: 4_294_967_296,
+        });
+        app.update(crate::event::UiEvent::Key(crossterm::event::KeyEvent::new(
+            crossterm::event::KeyCode::Char('q'),
+            crossterm::event::KeyModifiers::NONE,
+        )));
+
+        let text = frame_text(&app, 120, 40);
+        assert!(text.contains("Work in progress"), "{text}");
+        assert!(text.contains("downloading gemma4-12b"), "{text}");
+        assert!(
+            text.contains("stopped on exit"),
+            "the server note is missing"
+        );
+    }
+
+    /// A look at the real table at two widths, so the column layout is
+    /// judged by what it draws rather than by its own arithmetic.
+    #[test]
+    #[ignore = "prints the Models table for inspection"]
+    fn show_the_models_table() {
+        let mut app = App::with_config_path(shipped("16gb"));
+        app.update(crate::event::UiEvent::CacheList(vec![
+            "unsloth/gemma-4-12B-it-qat-GGUF:Q4_K_XL".to_string(),
+            "unsloth/Qwen3-14B-GGUF:Q4_K_XL".to_string(),
+        ]));
+
+        for width in [120u16, 100] {
+            eprintln!("\n===== {width} columns =====");
+            for line in frame_text(&app, width, 30).lines().take(20) {
+                eprintln!("{line}");
+            }
+        }
     }
 
     #[test]
