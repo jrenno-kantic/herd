@@ -38,9 +38,17 @@ fn commit() -> String {
         return "unknown".to_string();
     };
 
-    // `--quiet` exits non-zero when there is a difference, so "no output
-    // and a failure" is how a dirty tree reports itself.
-    let dirty = git(&["diff", "--quiet", "HEAD"]).is_none();
+    // `git status --porcelain`, not `git diff --quiet`.
+    //
+    // `diff --quiet` does not refresh the index, so it reports a
+    // difference for a file whose mtime moved but whose contents did not —
+    // which `touch`, rustfmt and every editor save do routinely. It marked
+    // a clean checkout `-dirty`, and a marker that is always on says
+    // nothing. `status` refreshes; `--untracked-files=no` keeps scratch
+    // files out of it, since the question is whether the *source that
+    // built this* is committed.
+    let dirty = capture(&["status", "--porcelain", "--untracked-files=no"])
+        .is_some_and(|output| !output.trim().is_empty());
 
     if dirty {
         format!("{hash}-dirty")
@@ -56,13 +64,20 @@ fn commit_date() -> String {
     git(&["log", "-1", "--format=%cd", "--date=short"]).unwrap_or_else(|| "unknown".to_string())
 }
 
-/// Runs git, or `None` if it is absent or the command fails.
-fn git(args: &[&str]) -> Option<String> {
+/// Runs git and returns its output, or `None` if it is absent or failed.
+///
+/// Empty output is a real answer here — it is how `status --porcelain`
+/// says "clean" — so it is kept, unlike in [`git`].
+fn capture(args: &[&str]) -> Option<String> {
     let output = Command::new("git").args(args).output().ok()?;
-    if !output.status.success() {
-        return None;
-    }
+    output
+        .status
+        .success()
+        .then(|| String::from_utf8_lossy(&output.stdout).to_string())
+}
 
-    let text = String::from_utf8(output.stdout).ok()?.trim().to_string();
+/// Runs git for a value, treating empty output as failure.
+fn git(args: &[&str]) -> Option<String> {
+    let text = capture(args)?.trim().to_string();
     (!text.is_empty()).then_some(text)
 }
