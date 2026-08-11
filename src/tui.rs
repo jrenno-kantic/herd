@@ -299,6 +299,28 @@ spec-type = draft-mtp
         );
     }
 
+    /// The description line must name the mechanism: "speculative
+    /// decoding" alone does not say it is MTP, which is the part worth
+    /// reading when a model ships more than one head.
+    #[test]
+    fn the_description_line_names_the_speculative_head() {
+        let mut app = App::with_config_path(shipped("16gb"));
+
+        let mtp = app
+            .llama
+            .rows()
+            .iter()
+            .position(|row| row.spec == "mtp")
+            .expect("the 16gb tier has an MTP preset");
+        app.llama.cursor = mtp;
+
+        let text = frame_text(&app, 120, 40);
+        assert!(
+            text.contains("speculative decoding (mtp)"),
+            "the head is not named: {text}"
+        );
+    }
+
     /// Scrolling a list whose length and position are invisible is
     /// guesswork: a cursor stopped at the end looks exactly like one that
     /// stopped responding.

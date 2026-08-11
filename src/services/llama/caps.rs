@@ -82,16 +82,29 @@ impl Capability {
 /// not "no vision", it is "vision, deliberately off to save the projector's
 /// memory". Showing those two the same way would hide a setting the user
 /// chose and might want back.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Trait {
     pub capability: Capability,
     pub enabled: bool,
+    /// The concrete mechanism, where the preset names one — `mtp`,
+    /// `eagle3`, `ngram-cache`. `S` in the CAPS column says *whether*
+    /// speculative decoding is on; this says which head is doing it, which
+    /// is the part worth reading when a model has more than one option.
+    pub detail: Option<String>,
 }
 
 impl Trait {
+    fn plain(capability: Capability, enabled: bool) -> Self {
+        Self {
+            capability,
+            enabled,
+            detail: None,
+        }
+    }
+
     /// Uppercase when on, lowercase when the model has it but the preset
     /// does not use it.
-    pub fn letter(self) -> char {
+    pub fn letter(&self) -> char {
         if self.enabled {
             self.capability.letter()
         } else {
@@ -99,13 +112,17 @@ impl Trait {
         }
     }
 
-    /// `vision` / `vision (off)`, for spelling out the selected row.
-    pub fn label(self) -> String {
-        if self.enabled {
-            self.capability.label().to_string()
-        } else {
-            format!("{} (off)", self.capability.label())
+    /// `vision`, `vision (off)`, `speculative decoding (mtp)`.
+    pub fn label(&self) -> String {
+        let mut label = self.capability.label().to_string();
+
+        if let Some(detail) = &self.detail {
+            label.push_str(&format!(" ({detail})"));
         }
+        if !self.enabled {
+            label.push_str(" (off)");
+        }
+        label
     }
 }
 
@@ -172,10 +189,7 @@ pub fn capabilities(repo: &str, no_mmproj: bool, spec_type: Option<&str>) -> Vec
     // direction to be wrong in, and the honest fix would be to look for an
     // `mmproj` in the repo listing rather than to guess harder.
     if lower.contains("-vl-") || lower.contains("vision") || lower.contains("omni") {
-        found.push(Trait {
-            capability: Capability::Vision,
-            enabled: !no_mmproj,
-        });
+        found.push(Trait::plain(Capability::Vision, !no_mmproj));
     }
 
     // The repo shipping an MTP head means the model can do it; the preset
@@ -186,21 +200,24 @@ pub fn capabilities(repo: &str, no_mmproj: bool, spec_type: Option<&str>) -> Vec
         found.push(Trait {
             capability: Capability::Speculative,
             enabled: uses_head,
+            // `draft-mtp` reads as `mtp`: the `draft-` prefix is llama.cpp
+            // grouping, not information.
+            detail: spec_type
+                .map(|spec| {
+                    spec.trim()
+                        .trim_start_matches("draft-")
+                        .to_ascii_lowercase()
+                })
+                .filter(|spec| !spec.is_empty()),
         });
     }
 
     if lower.contains("audio") || lower.contains("voice") || lower.contains("omni") {
-        found.push(Trait {
-            capability: Capability::Audio,
-            enabled: true,
-        });
+        found.push(Trait::plain(Capability::Audio, true));
     }
 
     if lower.contains("coder") || lower.contains("-code") {
-        found.push(Trait {
-            capability: Capability::Code,
-            enabled: true,
-        });
+        found.push(Trait::plain(Capability::Code, true));
     }
 
     found
@@ -388,6 +405,51 @@ mod tests {
     fn nothing_to_report_reads_as_a_dash() {
         assert_eq!(tokens(&[]), "-");
         assert_eq!(letters(&[]), "-");
+    }
+
+    /// The description line must name the mechanism, not just say that
+    /// speculative decoding is on — `mtp` is the part worth reading.
+    #[test]
+    fn the_speculative_label_names_the_head() {
+        let traits = capabilities("unsloth/gemma-4-12B-it-qat-GGUF", false, Some("draft-mtp"));
+        let spec = traits
+            .iter()
+            .find(|t| t.capability == Capability::Speculative)
+            .expect("speculative");
+
+        assert_eq!(spec.detail.as_deref(), Some("mtp"));
+        assert_eq!(spec.label(), "speculative decoding (mtp)");
+    }
+
+    /// A head the repo ships but the preset does not configure has no
+    /// mechanism to name, and says so rather than inventing one.
+    #[test]
+    fn an_unused_head_is_labelled_off_with_no_mechanism() {
+        let traits = capabilities("unsloth/Qwen3.5-9B-MTP-GGUF", false, None);
+        let spec = traits
+            .iter()
+            .find(|t| t.capability == Capability::Speculative)
+            .expect("speculative");
+
+        assert_eq!(spec.detail, None);
+        assert_eq!(spec.label(), "speculative decoding (off)");
+    }
+
+    /// The `draft-` prefix is llama.cpp grouping, not information.
+    #[test]
+    fn the_draft_prefix_is_stripped_from_the_mechanism() {
+        for (spec, expected) in [
+            ("draft-eagle3", "eagle3"),
+            ("draft-mtp", "mtp"),
+            ("ngram-cache", "ngram-cache"),
+        ] {
+            let traits = capabilities("vendor/model", false, Some(spec));
+            let found = traits
+                .iter()
+                .find(|t| t.capability == Capability::Speculative)
+                .expect("speculative");
+            assert_eq!(found.detail.as_deref(), Some(expected));
+        }
     }
 
     #[test]
