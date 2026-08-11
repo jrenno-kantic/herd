@@ -471,6 +471,19 @@ fn spawn_health_poller(
         let started = tokio::time::Instant::now();
         let mut tracker = HealthTracker::default();
 
+        // What was already half-downloaded before this launch.
+        //
+        // A killed download leaves its partial behind — this cache holds
+        // several — and counting those as progress would report
+        // "downloading 192M" for a launch where nothing is being fetched,
+        // and hold off the bind budget for ten minutes on the strength of
+        // bytes that arrived days ago. Only growth beyond this counts, so
+        // a resumed download still reads correctly: it grows from here.
+        let baseline = repo
+            .as_deref()
+            .map(super::hub::partial_bytes_for)
+            .unwrap_or(0);
+
         loop {
             tokio::time::sleep(tracker.interval()).await;
 
@@ -486,7 +499,8 @@ fn spawn_health_poller(
             let partial = repo
                 .as_deref()
                 .map(super::hub::partial_bytes_for)
-                .unwrap_or(0);
+                .unwrap_or(0)
+                .saturating_sub(baseline);
             let report = tracker.observe(health, started.elapsed(), &base_url, partial);
 
             if let Some(line) = report.log {
@@ -1118,6 +1132,25 @@ http.server.HTTPServer(('127.0.0.1', {port}), H).serve_forever()
             report.status,
             Some((ServerState::Starting, Phase::Downloading(9_000_000)))
         );
+    }
+
+    /// A killed download leaves its partial behind, and this cache holds
+    /// several. Counting stale bytes as progress would report a download
+    /// for a launch that is fetching nothing, and hold off the bind budget
+    /// for ten minutes on the strength of bytes that arrived days ago.
+    /// Only growth past the launch baseline counts, which the poller
+    /// subtracts before the tracker ever sees it.
+    #[test]
+    fn bytes_that_predate_the_launch_are_not_progress() {
+        let mut tracker = HealthTracker::default();
+        let url = "http://127.0.0.1:1234";
+
+        // The poller passes 0 because nothing has grown past the baseline.
+        tracker.observe(api::Health::Unreachable, Duration::ZERO, url, 0);
+        let report = tracker.observe(api::Health::Unreachable, BIND_BUDGET, url, 0);
+
+        assert!(report.done, "a stale partial held off the bind budget");
+        assert!(matches!(report.status, Some((ServerState::Error(_), _))));
     }
 
     /// ...but a download that has stopped dead still fails, measured from

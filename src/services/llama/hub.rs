@@ -825,6 +825,45 @@ number of models in cache: 3
             }
         }
 
+        /// The path derivation is the risky half of the download phase:
+        /// if `partial_bytes_for` looks in the wrong directory it silently
+        /// returns zero, and a launch-time download reads as a failure to
+        /// bind again. Checked against whatever partials the real cache
+        /// happens to hold.
+        #[tokio::test]
+        #[ignore = "reads the real HuggingFace cache"]
+        async fn partials_are_found_in_the_real_cache() {
+            let Some(hub) = hub_dir() else {
+                eprintln!("skipping: no HOME");
+                return;
+            };
+            assert!(hub.is_dir(), "hub cache not at {}", hub.display());
+
+            // Every repo directory the cache holds, and what we make of it.
+            let mut seen = 0;
+            for entry in std::fs::read_dir(&hub).expect("read hub").flatten() {
+                let name = entry.file_name().to_string_lossy().to_string();
+                let Some(repo) = name.strip_prefix("models--") else {
+                    continue;
+                };
+                let reference = repo.replace("--", "/");
+
+                let direct = partial_bytes(&entry.path());
+                let derived = partial_bytes_for(&reference);
+                assert_eq!(
+                    direct, derived,
+                    "{reference}: the reference form found {derived} where the \
+                     directory form found {direct}"
+                );
+
+                if direct > 0 {
+                    eprintln!("  {reference}: {} in partials", human_bytes(direct));
+                    seen += 1;
+                }
+            }
+            eprintln!("  {seen} repo(s) with a download in flight");
+        }
+
         /// The tree API is what the confirmation prompt's sizes come from,
         /// and what the file selection runs against.
         #[tokio::test]
