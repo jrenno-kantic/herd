@@ -503,6 +503,16 @@ fn spawn_health_poller(
                 .saturating_sub(baseline);
             let report = tracker.observe(health, started.elapsed(), &base_url, partial);
 
+            // Checked again, because probing is not instant: a `/health`
+            // call waits out its timeout, and a stop landing in that
+            // window has already announced OFF by the time we get here.
+            // Emitting now would put STARTING — or, mid-download, an error
+            // about nothing listening — on top of it, leaving the app
+            // showing a failed server that is not even running.
+            if !is_current(&child_slot, generation).await {
+                return;
+            }
+
             if let Some(line) = report.log {
                 let _ = tx.send(UiEvent::Log(line));
             }
@@ -904,6 +914,87 @@ http.server.HTTPServer(('127.0.0.1', {port}), H).serve_forever()
 
         assert_eq!(app.llama.server.model.as_deref(), Some("qwen3-coder"));
         supervisor.stop().await;
+    }
+
+    /// Pressing stop while a launch is still probing must leave the app
+    /// OFF, not back in STARTING or ERROR.
+    ///
+    /// The window is real: the poller checks whether the launch is still
+    /// current, then spends up to the health timeout waiting on a reply.
+    /// A stop completing inside that window emits OFF, and the poller then
+    /// overwrote it with whatever it had computed — which during a
+    /// download is an error about nothing listening. The app sat in ERROR
+    /// with no running process and no way to clear it.
+    ///
+    /// Held open deliberately with a listener that accepts and never
+    /// answers, so the race is not left to chance.
+    #[tokio::test]
+    async fn a_stop_during_a_probe_leaves_the_app_off() {
+        const PORT: u16 = 18251;
+        const HANGS: &str = "\
+import socket
+s = socket.socket()
+s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+s.bind(('127.0.0.1', 18251)); s.listen(8)
+conns = []
+while True:
+    c, _ = s.accept()
+    conns.append(c)   # accepted, never answered
+";
+
+        if std::process::Command::new("python3")
+            .arg("--version")
+            .output()
+            .is_err()
+        {
+            eprintln!("skipping: python3 not available");
+            return;
+        }
+
+        let mut hang = tokio::process::Command::new("python3")
+            .args(["-c", HANGS])
+            .kill_on_drop(true)
+            .spawn()
+            .expect("spawn the hanging listener");
+        tokio::time::sleep(Duration::from_millis(400)).await;
+
+        let supervisor = Supervisor::new();
+        let (tx, mut rx) = mpsc::unbounded_channel();
+
+        supervisor
+            .spawn_program(
+                "/bin/sleep",
+                LauncherMode::Manual,
+                Some("stalling".into()),
+                vec!["30".into()],
+                format!("http://127.0.0.1:{PORT}"),
+                tx.clone(),
+                None,
+            )
+            .await
+            .expect("spawn");
+
+        // Long enough for the poller to be inside the probe it will never
+        // get an answer to.
+        tokio::time::sleep(Duration::from_millis(900)).await;
+        supervisor.stop_announced(&tx).await;
+
+        // Past the health timeout, so a late emit would have landed.
+        tokio::time::sleep(Duration::from_secs(4)).await;
+        let _ = hang.kill().await;
+
+        let mut states = Vec::new();
+        while let Ok(event) = rx.try_recv() {
+            if let UiEvent::LlamaStatus(snapshot) = event {
+                states.push(snapshot.state);
+            }
+        }
+
+        assert_eq!(
+            states.last(),
+            Some(&ServerState::Off),
+            "a retired poller reported after the stop: {states:?}"
+        );
     }
 
     /// Hot-swapping replaces the child in the shared slot. The watchers

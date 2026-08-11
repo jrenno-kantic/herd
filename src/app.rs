@@ -571,6 +571,18 @@ impl LauncherState {
         memory::estimate_gib(&repo)
     }
 
+    /// Does anything on screen advance on its own?
+    ///
+    /// Only the clocks do: the server's elapsed/uptime line and the "waiting
+    /// for the model" counter. Everything else — the table, the logs, the
+    /// download bar — is redrawn by the event that changed it.
+    ///
+    /// Used to skip the redraw on an idle tick. At rest that was four full
+    /// renders a second forever, for a screen that had not changed.
+    pub fn ticking(&self) -> bool {
+        self.server.elapsed_label().is_some() || self.chat_pending
+    }
+
     /// How long the in-flight probe has been running, or `None` when none
     /// is. Read every tick, which is what makes the counter move.
     pub fn chat_elapsed(&self) -> Option<std::time::Duration> {
@@ -1711,10 +1723,21 @@ impl App {
 
     fn stop_server(&mut self) -> Action {
         if self.llama.server.state.is_live() {
-            self.dispatch_stop()
-        } else {
-            Action::None
+            return self.dispatch_stop();
         }
+
+        // Nothing is running, so there is nothing to stop — but a failed
+        // launch leaves ERROR on screen with no key that clears it, and
+        // `s` is the only one that could plausibly mean "I have read
+        // that, put it away". Purely local: no process is involved.
+        if let ServerState::Error(reason) = self.llama.server.state.clone() {
+            self.llama.server.state = ServerState::Off;
+            self.llama.server.phase = Phase::None;
+            self.llama.server.model = None;
+            self.push_log(format!("cleared: {reason}"));
+        }
+
+        Action::None
     }
 
     /// Queues `:stop`, **bypassing the busy gate**.
@@ -3015,6 +3038,63 @@ alias = qwen3-coder
 
         app.update(ch('s'));
         assert!(!app.running);
+    }
+
+    /// At rest nothing on screen advances, so an idle tick has nothing to
+    /// redraw for. Getting this wrong in the other direction is the real
+    /// risk — a clock that stops ticking — so both halves are pinned.
+    #[test]
+    fn only_a_running_clock_makes_an_idle_tick_worth_drawing() {
+        let mut app = app_with_sample();
+        assert!(!app.llama.ticking(), "an idle app redraws for nothing");
+
+        // A launch starts the uptime clock.
+        app.update(UiEvent::LlamaStatus(LlamaSnapshot::new(
+            ServerState::Starting,
+            LauncherMode::Manual,
+            Some("gemma4-12b".into()),
+        )));
+        assert!(app.llama.ticking(), "the elapsed counter would freeze");
+
+        // Stopping puts it away again.
+        app.update(UiEvent::LlamaStatus(LlamaSnapshot::off()));
+        assert!(!app.llama.ticking());
+
+        // ...and so does a probe in flight, which counts up while waiting.
+        app.llama.chat_pending = true;
+        assert!(app.llama.ticking(), "the waiting counter would freeze");
+    }
+
+    /// A failed launch left ERROR on screen with no key that cleared it:
+    /// `s` did nothing, because there was nothing running to stop. The
+    /// state outlived the failure it described.
+    #[test]
+    fn stop_clears_a_stale_error() {
+        let mut app = app_with_sample();
+        app.update(UiEvent::LlamaStatus(LlamaSnapshot::new(
+            ServerState::Error("download stalled at 4.5G".into()),
+            LauncherMode::Manual,
+            Some("gemma4-31b".into()),
+        )));
+        assert!(matches!(app.llama.server.state, ServerState::Error(_)));
+
+        assert!(matches!(app.update(ch('s')), Action::None));
+        assert_eq!(app.llama.server.state, ServerState::Off);
+        assert_eq!(app.llama.server.model, None);
+
+        let logs = app.logs.iter().cloned().collect::<Vec<_>>().join("\n");
+        assert!(logs.contains("download stalled"), "{logs}");
+    }
+
+    /// ...but stopping a live server is still a real stop, not a local
+    /// state edit.
+    #[test]
+    fn stop_on_a_live_server_still_dispatches() {
+        let mut app = app_with_sample();
+        app.llama.server.state = ServerState::Serving;
+
+        assert!(matches!(app.update(ch('s')), Action::RunCommand(_)));
+        assert_eq!(app.llama.server.state, ServerState::Serving, "not local");
     }
 
     /// Relaunching what is already up is a stop and a full reload for no

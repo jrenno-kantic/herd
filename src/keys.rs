@@ -114,7 +114,12 @@ const MODELS: &[Binding] = &[
         "launch",
         "launch the highlighted preset",
     ),
-    brief(&["s"], "s", "stop", "stop the server"),
+    brief(
+        &["s"],
+        "s",
+        "stop",
+        "stop the server, or clear a failed launch",
+    ),
     brief(
         &["d"],
         "d",
