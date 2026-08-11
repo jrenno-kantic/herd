@@ -334,13 +334,25 @@ fn is_split_part(stem: &str, needle: &str) -> bool {
 /// Each file is named outright rather than passed as a glob, so a repo
 /// holding a dozen quantisations cannot surprise anyone with the wrong
 /// twenty gigabytes.
+///
+/// They go in as the **positional `FILENAMES`**, not as `--include`, and
+/// that distinction is load-bearing. `hf` used to parse its arguments with
+/// argparse, where `--include` took a whole list, so `--include a b c` named
+/// three files. It parses them with click now, where `--include TEXT` takes
+/// exactly one value — so the same argv reads as *one* include pattern plus
+/// two positional filenames, and `hf` resolves that conflict by announcing
+/// "Ignoring `--include` since filenames have been explicitly set" and
+/// fetching only the positional ones. For the ordinary weights + projector
+/// case that silently skips the weights and still exits 0: the download
+/// "succeeds", the model is not there, and the row stays "not local". Every
+/// split model fails the same way, losing its first part.
+///
+/// Positional filenames are exact paths rather than globs and are accepted
+/// by both the old and the new CLI, so this is the form that says what it
+/// means on either.
 pub fn download_args(repo: &str, files: &[RepoFile]) -> Vec<String> {
     let mut args = vec!["download".to_string(), repo.to_string()];
-
-    if !files.is_empty() {
-        args.push("--include".to_string());
-        args.extend(files.iter().map(|f| f.path.clone()));
-    }
+    args.extend(files.iter().map(|f| f.path.clone()));
 
     // `--format human` is what keeps `hf` talking at all when its output
     // is a pipe rather than a terminal; without it the command runs
@@ -708,12 +720,48 @@ number of models in cache: 3
         );
         let args = download_args("unsloth/Qwen3.5-9B-GGUF", &files);
 
-        assert_eq!(args[0], "download");
-        assert_eq!(args[1], "unsloth/Qwen3.5-9B-GGUF");
-        assert!(args.contains(&"--include".to_string()));
-        assert!(args.contains(&"Qwen3.5-9B-UD-Q4_K_XL.gguf".to_string()));
-        assert!(args.contains(&"mmproj-BF16.gguf".to_string()));
+        assert_eq!(
+            args,
+            [
+                "download",
+                "unsloth/Qwen3.5-9B-GGUF",
+                "Qwen3.5-9B-UD-Q4_K_XL.gguf",
+                "mmproj-BF16.gguf",
+                "--format",
+                "human",
+            ]
+        );
         assert!(!args.iter().any(|arg| arg.contains('*')), "{args:?}");
+    }
+
+    /// Regression, and the reason downloads failed on a machine with
+    /// `hf` 1.27: under click, `--include` takes exactly one value, so
+    /// `--include weights.gguf mmproj.gguf` parses as one glob plus one
+    /// positional filename — and `hf` then ignores the `--include`
+    /// outright and fetches the projector *without the weights*, exiting
+    /// 0. Naming the files positionally is the only form that means the
+    /// same thing to both the old and the new CLI.
+    #[test]
+    fn the_files_are_positional_so_hf_cannot_drop_the_weights() {
+        let files = select(
+            &repo(),
+            Some("UD-Q4_K_XL"),
+            Wants {
+                mmproj: true,
+                mtp: true,
+            },
+        );
+        let args = download_args("unsloth/Qwen3.5-9B-GGUF", &files);
+
+        assert!(
+            !args.iter().any(|arg| arg == "--include"),
+            "--include silently drops all but one file under hf >= 1.27: {args:?}"
+        );
+        // Every selected file survives into the argv, in order, straight
+        // after the repo — nothing may be left behind by the flag parser.
+        let named: Vec<&str> = args[2..args.len() - 2].iter().map(String::as_str).collect();
+        let wanted: Vec<&str> = files.iter().map(|f| f.path.as_str()).collect();
+        assert_eq!(named, wanted);
         // Without this `hf` prints nothing at all into a pipe.
         assert_eq!(args[args.len() - 2..], ["--format", "human"]);
     }
@@ -862,6 +910,70 @@ number of models in cache: 3
                 }
             }
             eprintln!("  {seen} repo(s) with a download in flight");
+        }
+
+        /// The argv is checked against the real `hf`, because every other
+        /// test here only proves we *built* the arguments we meant to —
+        /// not that the CLI reads them the same way. That gap is precisely
+        /// where downloads broke: `--include a b c` named three files under
+        /// argparse and names one glob plus two positional filenames under
+        /// click, so `hf` quietly fetched the projector without the weights
+        /// and exited 0.
+        ///
+        /// `--dry-run` makes this free: it resolves and prints what would
+        /// be fetched without transferring anything, so the assertion is
+        /// that `hf` agrees on the *count* of files we asked for.
+        #[tokio::test]
+        #[ignore = "requires the hf CLI and network access to huggingface.co"]
+        async fn hf_resolves_every_file_the_argv_names() {
+            let reference = "unsloth/gemma-4-12B-it-qat-GGUF:UD-Q4_K_XL";
+            let (repo, tag) = split_repo(reference);
+
+            let files = tree(repo).await.expect("tree listing");
+            let chosen = select(
+                &files,
+                tag,
+                Wants {
+                    mmproj: true,
+                    mtp: true,
+                },
+            );
+            assert!(chosen.len() > 1, "need >1 file to exercise the bug");
+
+            let mut args = download_args(repo, &chosen);
+            args.push("--dry-run".to_string());
+
+            let output = tokio::process::Command::new(DOWNLOADER)
+                .args(&args)
+                .output()
+                .await
+                .expect("run hf");
+            let text = format!(
+                "{}{}",
+                String::from_utf8_lossy(&output.stdout),
+                String::from_utf8_lossy(&output.stderr)
+            );
+
+            assert!(output.status.success(), "hf refused the argv:\n{text}");
+            // The tell-tale from the broken form. `hf` emits it and carries
+            // on with a subset, so it must be treated as a failure here.
+            assert!(
+                !text.contains("Ignoring `--include`"),
+                "hf discarded part of the argv:\n{text}"
+            );
+            // Every file we named must appear in what hf resolved.
+            for file in &chosen {
+                assert!(
+                    text.contains(&file.path),
+                    "hf did not resolve {}:\n{text}",
+                    file.path
+                );
+            }
+            assert!(
+                text.contains(&format!("{} files", chosen.len())),
+                "hf resolved a different number of files than the {} named:\n{text}",
+                chosen.len()
+            );
         }
 
         /// The tree API is what the confirmation prompt's sizes come from,

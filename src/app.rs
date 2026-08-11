@@ -1880,7 +1880,19 @@ alias = qwen3-coder
         ));
         let mut file = std::fs::File::create(&path).expect("create sample ini");
         file.write_all(SAMPLE_INI.as_bytes()).expect("write ini");
-        App::with_config_path(path)
+        let mut app = App::with_config_path(path);
+        // ...and pin the RAM too, for the same reason. `App::with_config_path`
+        // reads the *real* machine's memory, which silently made every
+        // fit-sensitive test built on this fixture depend on whose laptop it
+        // ran on: `qwen3-coder` is a 30B and sizes at ~18 GiB, so it fits the
+        // 36 GiB Mac these tests were written against and trips
+        // `Confirm::TooLarge` on a 16 GiB one — where `enter_launches_the_
+        // highlighted_preset` then failed, Enter having opened a prompt
+        // rather than launched. Tests that care about a particular budget
+        // still set `ram_gib` themselves; this is only a deterministic floor
+        // under the ones that do not.
+        app.llama.ram_gib = Some(36);
+        app
     }
 
     /// Everything a keystroke could plausibly change, as a string. Used
