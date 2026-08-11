@@ -96,10 +96,14 @@ async fn main() -> Result<()> {
         // Draining first collapses a burst into a single frame. The cap
         // keeps a firehose from starving the render altogether — the loop
         // simply comes straight back for the rest.
+        let mut idle = matches!(event, event::UiEvent::Tick);
         let mut actions = vec![app.update(event)];
         for _ in 0..DRAIN_LIMIT {
             match event_rx.try_recv() {
-                Ok(event) => actions.push(app.update(event)),
+                Ok(event) => {
+                    idle &= matches!(event, event::UiEvent::Tick);
+                    actions.push(app.update(event));
+                }
                 Err(_) => break,
             }
         }
@@ -120,7 +124,13 @@ async fn main() -> Result<()> {
             }
         }
 
-        terminal.draw(&app)?;
+        // A batch of nothing but ticks only changes the screen while a
+        // clock is running. Redrawing anyway was four full renders a
+        // second at rest, which is most of what herd costs when it is
+        // doing nothing at all.
+        if !idle || app.llama.ticking() {
+            terminal.draw(&app)?;
+        }
     }
 
     // Say what is happening before waiting for it. Shutdown is bounded,
