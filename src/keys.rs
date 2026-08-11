@@ -127,7 +127,12 @@ const MODELS: &[Binding] = &[
 ];
 
 const SERVER: &[Binding] = &[
-    brief(&["enter"], "enter", "launch", "launch the selected preset"),
+    brief(
+        &["enter"],
+        "enter",
+        "launch",
+        "launch the selected preset — refused when it is the one already serving",
+    ),
     brief(&["s"], "s", "stop", "stop the server"),
     brief(&["p"], "p", "ping", "ping the running model"),
 ];

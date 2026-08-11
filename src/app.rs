@@ -594,6 +594,31 @@ impl LauncherState {
         llama::hub::availability(&repo, cached)
     }
 
+    /// Why Enter on the Server screen would be a mistake, if it would.
+    ///
+    /// Relaunching the preset that is already up is a stop and a full
+    /// reload for no gain — on a machine where that reload is minutes, an
+    /// accidental one is expensive. The Models screen deliberately still
+    /// allows it: pressing Enter there after changing a setting is how a
+    /// session override is applied, and that is a real workflow. Here
+    /// Enter is a convenience, and the convenient thing is not to bounce
+    /// the server by accident.
+    ///
+    /// Shared with the Server screen's display so the reason shown and the
+    /// reason enforced cannot drift apart.
+    pub fn relaunch_blocked(&self) -> Option<String> {
+        let active = self.server.model.as_deref()?;
+
+        if !self.server.state.is_live() || self.selected_model().as_deref() != Some(active) {
+            return None;
+        }
+
+        Some(format!(
+            "{active} is already {} — relaunch it from the Models screen",
+            self.server.state.tag().to_ascii_lowercase()
+        ))
+    }
+
     /// Optimisations baked into a preset's weights.
     pub fn optimisations(&self, name: &str) -> Vec<llama::caps::Optimisation> {
         self.repo_of(name)
@@ -806,8 +831,8 @@ const DEFAULT_ROWS: u16 = 24;
 fn chrome(screen: Screen) -> u16 {
     match screen {
         // command bar (3) + status (1) + argv preview (8) + borders (2)
-        // + column header (1) + footer (1)
-        Screen::Models => 16,
+        // + column header (1) + two footer lines (2)
+        Screen::Models => 17,
         // command bar (3) + status (1) + borders (2) + footer (1), plus 6
         // for the section headers. The Settings cursor counts *entries*,
         // but a header is drawn as a blank line and a title — two rows
@@ -1138,7 +1163,13 @@ impl App {
                 Some(model) => self.run(format!("ping {model}")),
                 None => Action::None,
             },
-            KeyCode::Enter => self.launch_selected(),
+            KeyCode::Enter => match self.llama.relaunch_blocked() {
+                Some(reason) => {
+                    self.push_log(reason);
+                    Action::None
+                }
+                None => self.launch_selected(),
+            },
             _ => Action::None,
         }
     }
@@ -2984,6 +3015,75 @@ alias = qwen3-coder
 
         app.update(ch('s'));
         assert!(!app.running);
+    }
+
+    /// Relaunching what is already up is a stop and a full reload for no
+    /// gain — minutes of it, on a machine where loading is slow.
+    #[test]
+    fn enter_on_the_server_screen_refuses_to_relaunch_what_is_serving() {
+        let mut app = app_with_sample();
+        app.screen = Screen::Server;
+        app.update(UiEvent::LlamaStatus(LlamaSnapshot::new(
+            ServerState::Serving,
+            LauncherMode::Manual,
+            app.llama.selected_model(),
+        )));
+
+        assert!(app.llama.relaunch_blocked().is_some());
+        assert!(matches!(app.update(key(KeyCode::Enter)), Action::None));
+
+        let logs = app.logs.iter().cloned().collect::<Vec<_>>().join("\n");
+        assert!(logs.contains("already serving"), "{logs}");
+    }
+
+    /// ...but a *different* preset is a legitimate hot-swap, and must
+    /// still go through.
+    #[test]
+    fn enter_on_the_server_screen_still_swaps_to_another_preset() {
+        let mut app = app_with_sample();
+        app.screen = Screen::Server;
+        app.update(UiEvent::LlamaStatus(LlamaSnapshot::new(
+            ServerState::Serving,
+            LauncherMode::Manual,
+            Some("some-other-model".into()),
+        )));
+        app.update(UiEvent::CacheList(vec![
+            "unsloth/gemma-4-12B-it-qat-GGUF:Q4_K_XL".to_string(),
+        ]));
+
+        assert!(app.llama.relaunch_blocked().is_none());
+        match app.update(key(KeyCode::Enter)) {
+            Action::RunCommand(command) => assert_eq!(command, "launch gemma4-12b"),
+            other => panic!("expected a launch, got {other:?}"),
+        }
+    }
+
+    /// The Models screen deliberately keeps the relaunch: pressing Enter
+    /// there after changing a setting is how a session override is
+    /// applied, which is a real workflow the guard must not break.
+    #[test]
+    fn the_models_screen_still_relaunches_the_serving_preset() {
+        let mut app = app_with_sample();
+        app.update(UiEvent::LlamaStatus(LlamaSnapshot::new(
+            ServerState::Serving,
+            LauncherMode::Manual,
+            app.llama.selected_model(),
+        )));
+        app.update(UiEvent::CacheList(vec![
+            "unsloth/gemma-4-12B-it-qat-GGUF:Q4_K_XL".to_string(),
+        ]));
+
+        match app.update(key(KeyCode::Enter)) {
+            Action::RunCommand(command) => assert_eq!(command, "launch gemma4-12b"),
+            other => panic!("relaunch from Models was blocked: {other:?}"),
+        }
+    }
+
+    /// Nothing is running, so there is nothing to protect.
+    #[test]
+    fn nothing_is_blocked_while_the_server_is_off() {
+        let app = app_with_sample();
+        assert!(app.llama.relaunch_blocked().is_none());
     }
 
     /// An idle app quits on `q` with no ceremony — a prompt on the normal

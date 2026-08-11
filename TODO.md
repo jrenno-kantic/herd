@@ -71,7 +71,19 @@
 - [x] fix model column spec as MTP has disappeared → **SPEC** is back as its
       own column, and now outlives CAPS when the terminal narrows: `S` says
       only *whether* speculative decoding is on, SPEC says which head.
-- [ ] split model description and keys usage on 2 lines (instead of one)
-- [ ] disable "enter launch" when model is already started/serving in server screen
+- [x] split model description and keys usage on 2 lines (instead of one) →
+      the Models footer is two lines now: what the highlighted preset *is*,
+      then what the keys do. Sharing one line meant the description pushed
+      `t/T tier` and `d download` off the right edge, and the description is
+      the half that grows. The list loses a row for it, so `chrome(Models)`
+      went 16 → 17.
+- [x] disable "enter launch" when model is already started/serving in server
+      screen → `LauncherState::relaunch_blocked` refuses, and the Server
+      screen shows an `enter` field saying so, since a guard you only
+      discover by pressing the key is the wrong way round. A *different*
+      preset is still a legitimate hot-swap and goes through.
+      **The Models screen deliberately still relaunches**: pressing Enter
+      there after changing a setting is how a session override is applied.
 
+- [ ] fix bonsai-27b (16gb tier) that announce 16.1G instead of 3.5G 
 - [ ] how to optimize running memory and CPU consumption

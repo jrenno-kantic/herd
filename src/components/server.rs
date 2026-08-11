@@ -49,6 +49,11 @@ fn summary(app: &App) -> Paragraph<'static> {
             server.endpoint.clone().unwrap_or_else(|| "-".into()),
         ),
         field("uptime", uptime(app)),
+        // What Enter would do, spelled out. The guard that stops a
+        // pointless relaunch is invisible otherwise — you would find it by
+        // pressing the key and reading the log, which is the wrong way
+        // round for something that is disabled.
+        field("enter", launch_target(app)),
     ];
 
     lines.push(Line::from(""));
@@ -65,6 +70,17 @@ fn field(label: &str, value: String) -> Line<'static> {
         Span::styled(format!("  {label:<12}"), Theme::logs()),
         Span::styled(value, Theme::normal()),
     ])
+}
+
+/// What pressing Enter on this screen would launch, or why it would not.
+fn launch_target(app: &App) -> String {
+    if let Some(reason) = app.llama.relaunch_blocked() {
+        return format!("disabled · {reason}");
+    }
+    match app.llama.selected_model() {
+        Some(model) => format!("launch {model}"),
+        None => "-".to_string(),
+    }
 }
 
 fn uptime(app: &App) -> String {

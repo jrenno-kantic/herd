@@ -281,6 +281,24 @@ spec-type = draft-mtp
         );
     }
 
+    /// The Models footer used to put the preset description and the key
+    /// hints on one line, and the description — which now spells out
+    /// optimisations and capabilities — pushed the hints off the right
+    /// edge. Both must be fully visible.
+    #[test]
+    fn the_models_footer_shows_the_description_and_every_key() {
+        let app = sample_app();
+        let text = frame_text(&app, 120, 40);
+
+        assert!(text.contains("RAM"), "no description line: {text}");
+        // The hint that used to be truncated away.
+        assert!(text.contains("t/T tier"), "the key hints are still cut off");
+        assert!(
+            text.contains("d download"),
+            "the key hints are still cut off"
+        );
+    }
+
     /// Scrolling a list whose length and position are invisible is
     /// guesswork: a cursor stopped at the end looks exactly like one that
     /// stopped responding.
@@ -319,6 +337,26 @@ spec-type = draft-mtp
             text.contains("stopped on exit"),
             "the server note is missing"
         );
+    }
+
+    /// The Server screen, serving the preset the cursor is on — the case
+    /// where Enter is refused.
+    #[test]
+    #[ignore = "prints the Server screen for inspection"]
+    fn show_the_server_screen() {
+        let mut app = App::with_config_path(shipped("16gb"));
+        app.screen = Screen::Server;
+        app.update(crate::event::UiEvent::LlamaStatus(
+            crate::services::llama::LlamaSnapshot::new(
+                crate::services::llama::ServerState::Serving,
+                crate::services::llama::LauncherMode::Manual,
+                app.llama.selected_model(),
+            ),
+        ));
+
+        for line in frame_text(&app, 120, 30).lines().take(14) {
+            eprintln!("{line}");
+        }
     }
 
     /// A look at the real table at two widths, so the column layout is
