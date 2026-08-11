@@ -164,6 +164,7 @@ fn table(frame: &mut Frame, app: &App, area: Rect) {
             &estimate,
             &caps::tokens(&app.llama.optimisations(&row.name)),
             &caps::letters(&app.llama.capabilities(&row.name)),
+            &row.spec,
             local,
         );
 
@@ -203,6 +204,7 @@ struct Columns {
     ram: bool,
     opt: bool,
     caps: bool,
+    spec: bool,
 }
 
 /// Fixed widths. `repo` is the only elastic one.
@@ -211,6 +213,7 @@ const W_CTX: usize = 7;
 const W_RAM: usize = 6;
 const W_OPT: usize = 10;
 const W_CAPS: usize = 5;
+const W_SPEC: usize = 6;
 const W_LOCAL: usize = 9;
 const W_MARKER: usize = 2;
 const REPO_MIN: usize = 12;
@@ -225,6 +228,7 @@ impl Columns {
             ram: true,
             opt: true,
             caps: true,
+            spec: true,
         }
     }
 
@@ -239,6 +243,7 @@ impl Columns {
             (self.ram, W_RAM),
             (self.opt, W_OPT),
             (self.caps, W_CAPS),
+            (self.spec, W_SPEC),
         ] {
             if shown {
                 total += width + 1;
@@ -261,7 +266,11 @@ impl Columns {
         // Context size and the optimisation tokens are the first to go:
         // both are visible in the argv preview below, where the memory
         // estimate and the availability are not.
-        for drop in [Drop::Ctx, Drop::Opt, Drop::Caps, Drop::Ram] {
+        //
+        // SPEC outlives CAPS deliberately. `S` says only *whether*
+        // speculative decoding is on; SPEC says which head does it, and
+        // losing that was a real regression when CAPS first replaced it.
+        for drop in [Drop::Ctx, Drop::Opt, Drop::Caps, Drop::Spec, Drop::Ram] {
             if columns.width() <= width {
                 break;
             }
@@ -269,6 +278,7 @@ impl Columns {
                 Drop::Ctx => columns.ctx = false,
                 Drop::Opt => columns.opt = false,
                 Drop::Caps => columns.caps = false,
+                Drop::Spec => columns.spec = false,
                 Drop::Ram => columns.ram = false,
             }
         }
@@ -289,6 +299,7 @@ impl Columns {
             "RAM",
             "OPT",
             "CAPS",
+            "SPEC",
             "LOCAL",
         )
     }
@@ -303,6 +314,7 @@ impl Columns {
         ram: &str,
         opt: &str,
         caps: &str,
+        spec: &str,
         local: &str,
     ) -> String {
         let mut line = format!(
@@ -324,6 +336,9 @@ impl Columns {
         if self.caps {
             line.push_str(&format!(" {:>W_CAPS$}", truncate(caps, W_CAPS)));
         }
+        if self.spec {
+            line.push_str(&format!(" {:>W_SPEC$}", truncate(spec, W_SPEC)));
+        }
         line.push_str(&format!(" {local:>W_LOCAL$}"));
 
         line
@@ -335,6 +350,7 @@ enum Drop {
     Ctx,
     Opt,
     Caps,
+    Spec,
     Ram,
 }
 
@@ -475,7 +491,7 @@ mod column_tests {
     fn a_wide_terminal_shows_every_column() {
         let columns = Columns::for_width(WIDE);
 
-        assert!(columns.ctx && columns.ram && columns.opt && columns.caps);
+        assert!(columns.ctx && columns.ram && columns.opt && columns.caps && columns.spec);
         assert!(
             columns.width() <= WIDE,
             "still overflows: {}",
@@ -515,6 +531,9 @@ mod column_tests {
         assert!(columns.repo >= REPO_MIN);
         assert!(!columns.ctx, "ctx should go before ram");
         assert!(columns.ram, "ram is the last to go");
+        // The regression this column exists to prevent: SPEC must outlive
+        // CAPS, because `S` alone does not say which head is doing it.
+        assert!(columns.spec, "spec went before caps");
     }
 
     #[test]
@@ -529,6 +548,7 @@ mod column_tests {
             "8.1G",
             "qat ud",
             "vS",
+            "mtp",
             "not local",
         );
 
@@ -548,6 +568,7 @@ mod column_tests {
             "  ",
             "n",
             "unsloth/gemma-4-26B-A4B-it-qat-GGUF:UD-Q4_K_XL",
+            "1",
             "1",
             "1",
             "1",
