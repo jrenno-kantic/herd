@@ -108,6 +108,26 @@ pub fn default_config_path() -> PathBuf {
     resolve_config_path(None)
 }
 
+/// The repo reference a preset launches from, walking the same precedence
+/// chain as the argv builder (`[model]` -> `[*]` -> `[server]`).
+///
+/// Needed at launch so the health poller knows which cache directory to
+/// watch for a download in flight.
+pub fn effective_repo(config: &LlamaConfig, model: &str) -> Option<String> {
+    for key in ["hf-repo", "hf", "model"] {
+        let found = config
+            .model(model)
+            .and_then(|section| section.get(key))
+            .or_else(|| config.defaults.get(key))
+            .or_else(|| config.server.get(key));
+
+        if let Some(value) = found {
+            return Some(value.to_string());
+        }
+    }
+    None
+}
+
 /// The config override from the environment.
 ///
 /// `$OPS_TUI_LLAMA_CONFIG` is still honoured after the rename, because the

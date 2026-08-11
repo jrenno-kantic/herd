@@ -104,4 +104,6 @@
       the documented ~1 GiB runtime allowance on top of the weights.
       Every preset is sized that way.
 
+- [x] why gemma4-31b is indicated as not present locally, but the download seems to fail silently
+- [ ] fix when stop (s) is pressed while downloading a model, in that case reset the state as the app stay in error status
 - [ ] how to optimize running memory and CPU consumption

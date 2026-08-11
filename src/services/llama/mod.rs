@@ -108,6 +108,14 @@ pub enum Phase {
     None,
     /// STARTING: the process is alive but nothing answers on the port yet.
     Binding,
+    /// STARTING: llama-server is fetching the weights before it can load
+    /// them. Carries the bytes on disk so far.
+    ///
+    /// Its own phase because it is the one kind of "nothing is listening"
+    /// that is entirely healthy and can legitimately last half an hour —
+    /// treating it as a failed bind declared a 16 GiB download dead after
+    /// ninety seconds.
+    Downloading(u64),
     /// STARTING: the port answers (503) — weights are loading.
     Loading,
     /// SERVING: `/health` has stopped answering while the process is still
@@ -124,6 +132,7 @@ impl Phase {
         match self {
             Phase::None => None,
             Phase::Binding => Some("binding port".into()),
+            Phase::Downloading(bytes) => Some(format!("downloading {}", hub::human_bytes(bytes))),
             Phase::Loading => Some("loading weights".into()),
             Phase::Unresponsive(probes) => Some(format!("not responding ({probes} probes missed)")),
         }

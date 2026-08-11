@@ -170,14 +170,16 @@ impl Supervisor {
         args: Vec<String>,
         base_url: String,
         tx: mpsc::UnboundedSender<UiEvent>,
+        repo: Option<String>,
     ) -> Result<(), String> {
-        self.spawn_program(BINARY, mode, model, args, base_url, tx)
+        self.spawn_program(BINARY, mode, model, args, base_url, tx, repo)
             .await
     }
 
     /// Same as [`Supervisor::spawn`] with the program name injected, so
     /// tests can supervise something cheap and predictable instead of a
     /// real llama-server.
+    #[allow(clippy::too_many_arguments)]
     async fn spawn_program(
         &self,
         program: &str,
@@ -186,6 +188,7 @@ impl Supervisor {
         args: Vec<String>,
         base_url: String,
         tx: mpsc::UnboundedSender<UiEvent>,
+        repo: Option<String>,
     ) -> Result<(), String> {
         self.stop().await;
 
@@ -227,6 +230,7 @@ impl Supervisor {
             tx.clone(),
             mode,
             model.clone(),
+            repo,
         );
         spawn_exit_watcher(self.child.clone(), generation, tx, mode, model);
 
@@ -287,6 +291,11 @@ struct HealthTracker {
     serving: bool,
     reported: Phase,
     misses: u32,
+    /// Partial bytes seen last time, and when they last grew. The budgets
+    /// run from the last sign of progress rather than from the launch, so
+    /// a download cannot time out merely for being large.
+    partial: u64,
+    progress_at: Duration,
 }
 
 impl HealthTracker {
@@ -304,10 +313,23 @@ impl HealthTracker {
     ///
     /// `elapsed` is time since the launch, supplied by the caller so this
     /// stays a pure function of its inputs.
-    fn observe(&mut self, health: api::Health, elapsed: Duration, base_url: &str) -> Report {
+    fn observe(
+        &mut self,
+        health: api::Health,
+        elapsed: Duration,
+        base_url: &str,
+        partial: u64,
+    ) -> Report {
         if self.serving {
             return self.observe_while_serving(health);
         }
+
+        // Weights arriving is progress, even though the port is silent.
+        if partial > self.partial {
+            self.partial = partial;
+            self.progress_at = elapsed;
+        }
+        let stalled_for = elapsed.saturating_sub(self.progress_at);
 
         match health {
             api::Health::Serving => {
@@ -326,11 +348,39 @@ impl HealthTracker {
                 Report::status(ServerState::Starting, Phase::Loading)
             }
             api::Health::Unreachable => {
+                // A download in flight is not a failure to bind. It is the
+                // one silent-port state that is entirely healthy, and it
+                // can legitimately run for half an hour.
+                if self.partial > 0 {
+                    // ...as long as it is still arriving. A partial that
+                    // has not grown in the whole load budget is a dead
+                    // download, and waiting on it forever is the very
+                    // silence this phase exists to break.
+                    if stalled_for >= HEALTH_BUDGET {
+                        return Report::status(
+                            ServerState::Error(format!(
+                                "download stalled at {} after {}s with no new bytes",
+                                super::hub::human_bytes(self.partial),
+                                stalled_for.as_secs()
+                            )),
+                            Phase::None,
+                        )
+                        .final_status();
+                    }
+
+                    let phase = Phase::Downloading(self.partial);
+                    if self.reported != phase {
+                        self.reported = phase;
+                        return Report::status(ServerState::Starting, phase);
+                    }
+                    return Report::default();
+                }
+
                 // Never having listened is a different failure from loading
                 // slowly, and gets a much shorter leash: ten minutes of
                 // STARTING for a server that never opened its port is ten
                 // minutes of the UI implying something is still happening.
-                if self.reported == Phase::Binding && elapsed >= BIND_BUDGET {
+                if self.reported == Phase::Binding && stalled_for >= BIND_BUDGET {
                     return Report::status(
                         ServerState::Error(format!(
                             "nothing is listening on {base_url} after {}s",
@@ -344,7 +394,7 @@ impl HealthTracker {
                     self.reported = Phase::Binding;
                     return Report::status(ServerState::Starting, Phase::Binding);
                 }
-                if elapsed >= HEALTH_BUDGET {
+                if stalled_for >= HEALTH_BUDGET {
                     return Report::status(
                         ServerState::Error(format!(
                             "not serving after {}s",
@@ -407,6 +457,7 @@ impl HealthTracker {
 ///
 /// The child check remains load-bearing in the other direction: without it
 /// a model that dies during load would leave the UI stuck on STARTING.
+#[allow(clippy::too_many_arguments)]
 fn spawn_health_poller(
     child_slot: Arc<Mutex<Option<Supervised>>>,
     generation: u64,
@@ -414,6 +465,7 @@ fn spawn_health_poller(
     tx: mpsc::UnboundedSender<UiEvent>,
     mode: LauncherMode,
     model: Option<String>,
+    repo: Option<String>,
 ) {
     tokio::spawn(async move {
         let started = tokio::time::Instant::now();
@@ -427,7 +479,15 @@ fn spawn_health_poller(
             }
 
             let health = api::health(&base_url).await;
-            let report = tracker.observe(health, started.elapsed(), &base_url);
+            // Measured, not parsed — the same reasoning as the download
+            // bar. llama-server writes its partial into the hub cache, and
+            // watching it grow says "still working" without depending on
+            // anything llama.cpp prints.
+            let partial = repo
+                .as_deref()
+                .map(super::hub::partial_bytes_for)
+                .unwrap_or(0);
+            let report = tracker.observe(health, started.elapsed(), &base_url, partial);
 
             if let Some(line) = report.log {
                 let _ = tx.send(UiEvent::Log(line));
@@ -616,6 +676,7 @@ mod tests {
                 // probing rather than ever reporting Serving.
                 "http://127.0.0.1:1".into(),
                 tx,
+                None,
             )
             .await
             .expect("spawn /bin/sleep");
@@ -694,6 +755,7 @@ http.server.HTTPServer(('127.0.0.1', 18234), H).serve_forever()
                 vec!["-c".into(), SCRIPT.into()],
                 format!("http://127.0.0.1:{PORT}"),
                 tx,
+                None,
             )
             .await
             .expect("spawn python3");
@@ -787,6 +849,7 @@ http.server.HTTPServer(('127.0.0.1', {port}), H).serve_forever()
                 always_ok_server(18241),
                 "http://127.0.0.1:18241".into(),
                 tx.clone(),
+                None,
             )
             .await
             .expect("spawn first");
@@ -816,6 +879,7 @@ http.server.HTTPServer(('127.0.0.1', {port}), H).serve_forever()
                 always_ok_server(18242),
                 "http://127.0.0.1:18242".into(),
                 tx.clone(),
+                None,
             )
             .await
             .expect("spawn second");
@@ -846,6 +910,7 @@ http.server.HTTPServer(('127.0.0.1', {port}), H).serve_forever()
                 vec!["30".into()],
                 "http://127.0.0.1:1".into(),
                 tx.clone(),
+                None,
             )
             .await
             .expect("spawn first");
@@ -858,6 +923,7 @@ http.server.HTTPServer(('127.0.0.1', {port}), H).serve_forever()
                 vec!["0.2".into()],
                 "http://127.0.0.1:1".into(),
                 tx.clone(),
+                None,
             )
             .await
             .expect("spawn second");
@@ -903,6 +969,7 @@ http.server.HTTPServer(('127.0.0.1', {port}), H).serve_forever()
                 vec!["0.2".into()],
                 "http://127.0.0.1:1".into(),
                 tx,
+                None,
             )
             .await
             .expect("spawn");
@@ -934,7 +1001,7 @@ http.server.HTTPServer(('127.0.0.1', {port}), H).serve_forever()
 
         assert_eq!(
             tracker
-                .observe(api::Health::Serving, Duration::ZERO, url)
+                .observe(api::Health::Serving, Duration::ZERO, url, 0)
                 .status,
             Some((ServerState::Serving, Phase::None))
         );
@@ -942,11 +1009,11 @@ http.server.HTTPServer(('127.0.0.1', {port}), H).serve_forever()
         // Silence, but not yet enough of it to call: a single missed probe
         // is a slow request, not a stall.
         for _ in 1..UNRESPONSIVE_AFTER {
-            let report = tracker.observe(api::Health::Unreachable, Duration::ZERO, url);
+            let report = tracker.observe(api::Health::Unreachable, Duration::ZERO, url, 0);
             assert_eq!(report.status, None, "called it dead on the first miss");
         }
 
-        let report = tracker.observe(api::Health::Unreachable, Duration::ZERO, url);
+        let report = tracker.observe(api::Health::Unreachable, Duration::ZERO, url, 0);
         assert_eq!(
             report.status,
             Some((
@@ -965,12 +1032,12 @@ http.server.HTTPServer(('127.0.0.1', {port}), H).serve_forever()
         let mut tracker = HealthTracker::default();
         let url = "http://127.0.0.1:1234";
 
-        tracker.observe(api::Health::Serving, Duration::ZERO, url);
+        tracker.observe(api::Health::Serving, Duration::ZERO, url, 0);
         for _ in 0..UNRESPONSIVE_AFTER {
-            tracker.observe(api::Health::Unreachable, Duration::ZERO, url);
+            tracker.observe(api::Health::Unreachable, Duration::ZERO, url, 0);
         }
 
-        let report = tracker.observe(api::Health::Serving, Duration::ZERO, url);
+        let report = tracker.observe(api::Health::Serving, Duration::ZERO, url, 0);
         assert_eq!(report.status, Some((ServerState::Serving, Phase::None)));
         assert!(report.log.is_some(), "recovery was never logged");
     }
@@ -982,10 +1049,10 @@ http.server.HTTPServer(('127.0.0.1', {port}), H).serve_forever()
         let mut tracker = HealthTracker::default();
         let url = "http://127.0.0.1:1234";
 
-        tracker.observe(api::Health::Serving, Duration::ZERO, url);
+        tracker.observe(api::Health::Serving, Duration::ZERO, url, 0);
         for _ in 0..5 {
             assert_eq!(
-                tracker.observe(api::Health::Serving, Duration::ZERO, url),
+                tracker.observe(api::Health::Serving, Duration::ZERO, url, 0),
                 Report::default()
             );
         }
@@ -1001,29 +1068,70 @@ http.server.HTTPServer(('127.0.0.1', {port}), H).serve_forever()
 
         assert_eq!(
             tracker
-                .observe(api::Health::Unreachable, Duration::ZERO, url)
+                .observe(api::Health::Unreachable, Duration::ZERO, url, 0)
                 .status,
             Some((ServerState::Starting, Phase::Binding))
         );
         // Still binding: don't re-announce what is already on screen.
         assert_eq!(
             tracker
-                .observe(api::Health::Unreachable, Duration::ZERO, url)
+                .observe(api::Health::Unreachable, Duration::ZERO, url, 0)
                 .status,
             None
         );
         assert_eq!(
             tracker
-                .observe(api::Health::Loading, Duration::ZERO, url)
+                .observe(api::Health::Loading, Duration::ZERO, url, 0)
                 .status,
             Some((ServerState::Starting, Phase::Loading))
         );
         assert_eq!(
             tracker
-                .observe(api::Health::Loading, Duration::ZERO, url)
+                .observe(api::Health::Loading, Duration::ZERO, url, 0)
                 .status,
             None
         );
+    }
+
+    /// The bug this exists to prevent: llama-server downloads its own
+    /// weights when a launch finds them missing, and a 16 GiB fetch takes
+    /// far longer than the bind budget. Treating a silent port as a failed
+    /// bind declared a perfectly healthy download dead after ninety
+    /// seconds — which is exactly what it looks like from the outside when
+    /// a download "fails silently".
+    #[test]
+    fn a_download_in_flight_is_not_a_failure_to_bind() {
+        let mut tracker = HealthTracker::default();
+        let url = "http://127.0.0.1:1234";
+
+        // Bytes landing while the port stays silent.
+        let report = tracker.observe(api::Health::Unreachable, Duration::ZERO, url, 1_000_000);
+        assert_eq!(
+            report.status,
+            Some((ServerState::Starting, Phase::Downloading(1_000_000)))
+        );
+
+        // Well past the bind budget, still downloading, still not an error.
+        let report = tracker.observe(api::Health::Unreachable, BIND_BUDGET * 20, url, 9_000_000);
+        assert!(!report.done, "a download was called a failed bind");
+        assert_eq!(
+            report.status,
+            Some((ServerState::Starting, Phase::Downloading(9_000_000)))
+        );
+    }
+
+    /// ...but a download that has stopped dead still fails, measured from
+    /// the last byte rather than from the launch.
+    #[test]
+    fn a_stalled_download_still_times_out() {
+        let mut tracker = HealthTracker::default();
+        let url = "http://127.0.0.1:1234";
+
+        tracker.observe(api::Health::Unreachable, Duration::ZERO, url, 1_000);
+        let report = tracker.observe(api::Health::Unreachable, HEALTH_BUDGET * 2, url, 1_000);
+
+        assert!(report.done, "a dead download waited forever");
+        assert!(matches!(report.status, Some((ServerState::Error(_), _))));
     }
 
     /// A process that never opens its port fails on the short budget. It is
@@ -1035,8 +1143,8 @@ http.server.HTTPServer(('127.0.0.1', {port}), H).serve_forever()
         let mut tracker = HealthTracker::default();
         let url = "http://127.0.0.1:1234";
 
-        tracker.observe(api::Health::Unreachable, Duration::ZERO, url);
-        let report = tracker.observe(api::Health::Unreachable, BIND_BUDGET, url);
+        tracker.observe(api::Health::Unreachable, Duration::ZERO, url, 0);
+        let report = tracker.observe(api::Health::Unreachable, BIND_BUDGET, url, 0);
 
         assert!(report.done, "kept polling past the bind budget");
         assert!(
@@ -1058,8 +1166,8 @@ http.server.HTTPServer(('127.0.0.1', {port}), H).serve_forever()
         let mut tracker = HealthTracker::default();
         let url = "http://127.0.0.1:1234";
 
-        tracker.observe(api::Health::Loading, Duration::ZERO, url);
-        let report = tracker.observe(api::Health::Loading, BIND_BUDGET * 3, url);
+        tracker.observe(api::Health::Loading, Duration::ZERO, url, 0);
+        let report = tracker.observe(api::Health::Loading, BIND_BUDGET * 3, url, 0);
 
         assert!(!report.done, "a loading server was killed off by the leash");
     }
@@ -1087,6 +1195,7 @@ http.server.HTTPServer(('127.0.0.1', {port}), H).serve_forever()
                 ],
                 "http://127.0.0.1:1".into(),
                 tx,
+                None,
             )
             .await
             .expect("spawn /bin/sh");
@@ -1122,6 +1231,7 @@ http.server.HTTPServer(('127.0.0.1', {port}), H).serve_forever()
                 vec!["30".into()],
                 "http://127.0.0.1:1".into(),
                 tx,
+                None,
             )
             .await
             .expect("spawn /bin/sleep");
@@ -1188,6 +1298,7 @@ http.server.HTTPServer(('127.0.0.1', {port}), H).serve_forever()
                 vec!["--this-flag-does-not-exist".into()],
                 "http://127.0.0.1:1".into(),
                 tx,
+                None,
             )
             .await;
         // BINARY ("llama-server") may or may not be on PATH; either way

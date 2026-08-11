@@ -387,18 +387,44 @@ pub fn downloaded_bytes(repo_dir: &Path, wanted: &[RepoFile]) -> u64 {
         .map(|file| file.size)
         .sum();
 
-    let partial: u64 = std::fs::read_dir(&blobs)
-        .map(|entries| {
-            entries
-                .flatten()
-                .filter(|entry| entry.file_name().to_string_lossy().ends_with(".incomplete"))
-                .filter_map(|entry| entry.metadata().ok())
-                .map(|meta| meta.len())
-                .sum()
-        })
-        .unwrap_or(0);
+    complete + partial_bytes(repo_dir)
+}
 
-    complete + partial
+/// Suffixes the two downloaders use for a file still arriving.
+///
+/// **Both**, because either can be the one fetching: `hf` when the user
+/// asks herd to download, and `llama-server` itself when a launch finds
+/// the weights absent. Counting only `hf`'s meant a launch-time download —
+/// the slow, 16 GiB case people actually sit and watch — showed no
+/// progress at all, and then timed out as a failure to bind.
+const PARTIAL_SUFFIXES: [&str; 2] = [".incomplete", ".downloadInProgress"];
+
+/// Bytes sitting in half-finished blobs for this repo, whoever is writing
+/// them. Zero when the directory does not exist, which is the normal state
+/// before anything starts.
+pub fn partial_bytes(repo_dir: &Path) -> u64 {
+    let Ok(entries) = std::fs::read_dir(repo_dir.join("blobs")) else {
+        return 0;
+    };
+
+    entries
+        .flatten()
+        .filter(|entry| {
+            let name = entry.file_name().to_string_lossy().to_string();
+            PARTIAL_SUFFIXES.iter().any(|suffix| name.ends_with(suffix))
+        })
+        .filter_map(|entry| entry.metadata().ok())
+        .map(|meta| meta.len())
+        .sum()
+}
+
+/// [`partial_bytes`] for an ini `hf-repo` reference, which is what the
+/// launch path has to hand rather than a directory.
+pub fn partial_bytes_for(reference: &str) -> u64 {
+    let Some(hub) = hub_dir() else {
+        return 0;
+    };
+    partial_bytes(&repo_dir(&hub, split_repo(reference).0))
 }
 
 /// Human-readable size, for a prompt that is asking someone to commit to

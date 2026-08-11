@@ -238,27 +238,49 @@ impl Executor {
             let outcome = fetch(&repo, &files, &tx, &executor.download).await;
             progress.abort();
 
-            let summary = match &outcome {
+            // A zero exit from `hf` is not proof the model is usable.
+            // llama.cpp decides that, and it can still say no — a repo
+            // whose `main` moved on, or a fetch that stopped short, leaves
+            // the row reading "not local" while we cheerfully report
+            // success. So the claim is checked before it is made.
+            let verdict = match &outcome {
+                Err(error) => Err(error.clone()),
                 Ok(()) => {
-                    // One last tick so the bar lands on 100% rather than
-                    // wherever the poller happened to stop.
                     let _ = tx.send(UiEvent::DownloadProgress {
                         model: model.clone(),
                         done: total,
                         total,
                     });
-                    format!("{model} downloaded ({})", llama::hub::human_bytes(total))
+
+                    let cached = llama::hub::cache_list().await.unwrap_or_default();
+                    let _ = tx.send(UiEvent::CacheList(cached.clone()));
+
+                    match llama::hub::availability(&reference, &cached) {
+                        llama::hub::Availability::Local => Ok(format!(
+                            "{model} downloaded ({})",
+                            llama::hub::human_bytes(total)
+                        )),
+                        _ => Err(format!(
+                            "{} finished, but llama.cpp still does not list {repo} — \
+                             the fetch stopped short, or the repo has moved on to a \
+                             revision this build has not got",
+                            llama::hub::DOWNLOADER
+                        )),
+                    }
                 }
+            };
+
+            let summary = match &verdict {
+                Ok(summary) => summary.clone(),
                 Err(error) => error.clone(),
             };
 
             let _ = tx.send(UiEvent::DownloadFinished {
                 model: model.clone(),
-                result: Box::new(outcome.clone().map(|()| summary.clone())),
+                result: Box::new(verdict.clone()),
             });
-            executor.refresh_cache();
 
-            if outcome.is_ok() && then_launch {
+            if verdict.is_ok() && then_launch {
                 executor.run_command(format!("launch {model}"));
             }
 
@@ -324,6 +346,9 @@ impl Executor {
                     args,
                     base_url,
                     tx.clone(),
+                    // So the health poller can tell a 16 GiB download from
+                    // a server that never opened its port.
+                    llama::ini::effective_repo(&config, &model),
                 )
                 .await
             {
@@ -355,7 +380,7 @@ impl Executor {
                         llama::ini::build_router_args(&config, models_max, sleep_idle, &extra);
                     let base_url = llama::api::base_url(&config.client_host(), config.port());
                     match supervisor
-                        .spawn(LauncherMode::Router, None, args, base_url, tx.clone())
+                        .spawn(LauncherMode::Router, None, args, base_url, tx.clone(), None)
                         .await
                     {
                         Ok(()) => format!(
