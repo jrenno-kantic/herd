@@ -8,29 +8,36 @@ It is a Rust port and expansion of the `llama-launch.js` idea: that script resol
 
 | | Screen | What it does |
 |---|---|---|
-| `1` | **Models** | The presets in the active `models.ini`, with repo, context size and speculative-decoding mode. Launch with `Enter`. The active preset is marked `●` serving, `◐` starting or stopping, `✖` failed. |
+| `1` | **Models** | The presets in the active `models.ini`, with repo, context size, memory estimate, optimisations, capabilities, speculative head and whether the weights are on this machine. Launch with `Enter`, download with `d`. The active preset is marked `●` serving, `◐` starting or stopping, `✖` failed. |
 | `2` | **Server** | Lifecycle state, model, endpoint, uptime, and the tail of the process output. |
-| `3` | **Test** | Send a chat completion to the running model and see the reply, latency and token rate. |
+| `3` | **Test** | Send a chat completion to the running model and see the reply, when it was sent, the latency, token rate, and llama.cpp's own split of prompt-eval vs generation. |
 | `4` | **Stats** | Session counters — start time, uptime, tokens in/out, throughput — and the memory budget. |
 | `5` | **Settings** | Every `[server]`, `[*]` and per-model key, editable for the session. |
-| `6` | **Logs** | Full log history. |
+| `6` | **Logs** | Full log history, scrollable, with a position indicator and a scrollbar. |
 
 ```
-┌HERD───────────────┐┌ Models · 32gb · ~/models/32gb/models.ini ────────────────────┐
-│ ▸ 1 Models           ││  NAME              REPO                     CTX    RAM  SPEC │
-│   2 Server           ││▸●gemma4-12b        unsloth/gemma-4-12B…   32768   7.7G  mtp  │
-│   3 Test             ││  gemma4-31b        unsloth/gemma-4-31B…   32768  18.3G  mtp  │
-│   4 Stats            ││  qwen3-coder       unsloth/Qwen3-Coder…   32768  17.8G   -   │
-│   5 Settings         ││                                                              │
-│   6 Logs             ││RAM 36 GiB   enter launch · s stop · / filter · c config      │
-│ tier  32gb           │└──────────────────────────────────────────────────────────────┘
-│ RAM   36 GiB         │┌ argv preview ────────────────────────────────────────────────┐
-│                      ││llama-server \                                                │
-│                      ││  --host 0.0.0.0 --port 1234 --jinja --ctx-size 32768 \        │
-│                      ││  --gpu-layers 99 --hf-repo unsloth/gemma-4-12B-it-qat-GGUF…   │
-└──────────────────────┘└──────────────────────────────────────────────────────────────┘
- SERVING  gemma4-12b · http://127.0.0.1:1234 · up 252s · tab screen · : command · q quit
+┌HERD 0.1.0────────────┐┌ Models · 32gb · ~/models/32gb/models.ini ─────────── 1/8 ┐
+│ ▸ 1 Models           ││  NAME            REPO              RAM     OPT CAPS SPEC   LOCAL│
+│   2 Server           ││▸●gemma4-12b      unsloth/gemma-4…  7.7G  qat ud    S  mtp        │
+│   3 Test             ││  gemma4-31b      unsloth/gemma-4… 18.3G  qat ud    S  mtp not local│
+│   4 Stats            ││  qwen3-coder     unsloth/Qwen3-C… 17.8G  ud moe    C    -        │
+│   5 Settings         ││                                                                  │
+│   6 Logs             ││  RAM 36 GiB · quantisation-aware training · speculative (mtp)    │
+│ tier  32gb           ││  j/↓ move · enter launch · s stop · d download · / filter        │
+│ RAM   36 GiB         │└──────────────────────────────────────────────────────────────────┘
+│                      │┌ argv preview ────────────────────────────────────────────────────┐
+│                      ││llama-server \                                                    │
+│                      ││  --host 0.0.0.0 --port 1234 --jinja --ctx-size 32768 \            │
+│                      ││  --gpu-layers 99 --hf-repo unsloth/gemma-4-12B-it-qat-GGUF…       │
+└──────────────────────┘└──────────────────────────────────────────────────────────────────┘
+ SERVING  gemma4-12b · up 04:12 · http://127.0.0.1:1234 · tab screen · : command · q quit
 ```
+
+The table **sizes itself to the terminal**. On a narrow one the least
+load-bearing columns are dropped in order — context size, then optimisations,
+then capabilities, then the speculative head — rather than being clipped off the
+right edge where you cannot tell an empty column from a cut-off one. The preset
+name and `LOCAL` are never dropped.
 
 ## Run
 
@@ -38,7 +45,12 @@ It is a Rust port and expansion of the `llama-launch.js` idea: that script resol
 cargo run
 cargo run -- --config ~/models/16gb/models.ini   # pick a specific preset file
 cargo run -- --help
+cargo run -- --version                           # herd 0.1.0 (a1b2c3d 2026-08-11)
 ```
+
+`--version` reports the commit the binary was built from, with `-dirty` when it
+came from a tree with uncommitted changes. A version number alone cannot tell
+two builds between releases apart; the commit can.
 
 ## Keybindings
 
@@ -48,29 +60,117 @@ Global:
 |-----|--------|
 | `1`–`6` | jump to a screen |
 | `c` | choose which `models.ini` to use |
-| `Tab` / `Shift-Tab` | cycle screens |
+| `Tab` / `Shift-Tab`, or `→` / `←` | cycle screens |
 | `:` | command bar (power-user escape hatch) |
-| `q` | quit |
+| `?` | key reference |
+| `q` | quit — asks first if a download, probe or command is in flight |
+| `Q` | quit at once, abandoning it |
 
 Models screen:
 
 | Key | Action |
 |-----|--------|
 | `Up`/`Down` or `j`/`k` | move the cursor |
+| `PgUp`/`PgDn` | move by a screenful — sized to your terminal, not a fixed 10 |
+| `g`/`Home`, `G`/`End` | jump to the first / last row |
 | `Enter` | launch the highlighted preset |
-| `s` | stop the running server |
+| `d` | download it without launching |
+| `s` | stop the running server, or clear a failed launch |
 | `/` | filter by name or repo (`Enter` keeps it, `Esc` clears it) |
 | `t` / `T` | next / previous RAM tier |
 | `c` | open the config picker |
 | `r` | reload `models.ini` from disk |
 
-Server screen: `s` stop, `p` ping, `Enter` launch the selected preset.
+Server screen: `s` stop, `p` ping, `Enter` launch the selected preset — refused
+when that preset is the one already serving, since relaunching it is a stop and
+a full reload for no gain. The screen says so in an `enter` field rather than
+leaving you to press the key and read the log. (The Models screen deliberately
+still allows it: pressing `Enter` there after changing a setting is how a
+session override gets applied.)
 
 Test screen: `Enter` send, `e` edit the prompt, `r` reset it.
 
 Stats screen: `+` / `-` adjust the memory reservation, `r` reset it.
 
-Settings screen: `Up`/`Down` move, `Enter` edit, `x` clear one override, `X` clear all.
+Settings screen: `Up`/`Down` move, `Enter` edit — or **flip** it, when the value
+is `true`/`false`, `on`/`off` or `yes`/`no` — `x` clear one override, `X` clear
+all. Toggleable rows carry a `[x]`/`[ ]` checkbox, so a row that flips looks
+different before you press anything.
+
+Logs screen: `k`/`j` scroll, `PgUp`/`PgDn` by a page, `g` oldest, `G` back to
+the newest line. A scrollbar on the right border shows where you are; nothing is
+drawn when the whole buffer fits.
+
+## Is the model actually on this machine?
+
+The `LOCAL` column says so, and it is answered by `llama-server --cache-list`
+rather than by looking at the filesystem — llama.cpp is what has to load the
+file, so its opinion is the one that counts. It is also better informed: it
+correctly refuses to list a repo whose current revision is only half
+downloaded, which no directory listing would catch.
+
+Until llama.cpp has been asked, nothing is claimed either way. Telling you to
+download a model you already have is the one mistake this can make, so it stays
+quiet rather than guess.
+
+Pressing `Enter` on a preset that is not here asks first, naming the size:
+
+```
+┌ Not downloaded ──────────────────────────────────────────────────┐
+│  The weights for this preset are not on this machine.            │
+│  It would be fetched from unsloth/gemma-4-31B-it-qat-GGUF.       │
+│  Several gigabytes over your connection, then it launches.       │
+│                                                                  │
+│  Launch 'gemma4-31b' anyway?   [y] yes   [any other key] cancel  │
+└──────────────────────────────────────────────────────────────────┘
+```
+
+Say yes and the argv preview is replaced by a progress bar until it finishes,
+then the model launches on its own. `d` does the download without launching,
+which is what makes a mostly-empty tier usable — you can queue up the ones you
+know you will want instead of discovering each one at the moment you need it.
+
+Which files get fetched comes from the preset, not from assumption: the weights
+matching its quantisation tag, the vision projector unless it says `no-mmproj`,
+and the MTP head only when its `spec-type` uses one. Files are named outright
+rather than globbed, so a repo holding a dozen quantisations cannot surprise you
+with the wrong twenty gigabytes.
+
+The download itself is delegated to the `hf` CLI, which owns the HuggingFace
+cache layout — the part that must not be got wrong. Progress is *measured* from
+the bytes landing on disk rather than parsed out of anything either downloader
+prints.
+
+## What a preset is and what it can do
+
+Two compact columns, spelled out in full for the highlighted row in the footer
+below the table — which doubles as the legend.
+
+| Column | Reads | Meaning |
+|---|---|---|
+| `OPT` | `qat` | quantisation-aware training |
+| | `ud` | Unsloth dynamic quantisation |
+| | `moe` | mixture of experts — the `A3B` in `35B-A3B` is the *active* count, and memory sizes on the total |
+| `CAPS` | `V` / `v` | vision — uppercase in use, lowercase available but switched off |
+| | `S` / `s` | speculative decoding |
+| | `A`, `C` | audio, code |
+| `SPEC` | `mtp`, `eagle3`, … | *which* speculative head, where `S` only says whether |
+
+All of it is read from the repo reference and the preset's own keys. Nothing
+comes from vendor knowledge that would rot — "Qwen3 supports thinking" is true
+today and a lie the moment a Qwen4 lands.
+
+Two deliberate omissions worth knowing:
+
+- **Thinking is not a column.** `reasoning = off` is set on every preset in both
+  shipped tiers, so a column driven by it would read the same on every row. It
+  is a setting, and the Settings screen is where settings live.
+- **Vision under-claims.** `no-mmproj = true` looks like evidence of a
+  projector — you would only disable one you had — but it is set defensively,
+  including on text-only models. It now only decides whether a capability found
+  by *name* is switched on. The cost is that `gemma-4` ships a projector without
+  saying so in its name and reads as text-only. That is the right direction to
+  be wrong in.
 
 ## Testing the running model
 
@@ -89,11 +189,21 @@ JSON.
 │  enter send · e edit prompt · r reset                      │
 └────────────────────────────────────────────────────────────┘
 ┌ Response ──────────────────────────────────────────────────┐
-│1.25s  ·  24 in / 11 out  ·  41.7 tok/s                     │
+│sent 14:32:07 · 1.25s · 24 in / 11 out · 41.7 tok/s         │
+│prompt eval 0.31s · generation 0.89s · overhead 0.05s       │
 │                                                            │
 │Bonjour ! Comment puis-je vous aider aujourd'hui ?          │
 └────────────────────────────────────────────────────────────┘
 ```
+
+The send time and the latency are measured here, so they are always present.
+The second line is llama.cpp's own split of the round trip and vanishes against
+any server that does not report it — a long prompt-eval on a paging machine
+looks identical to a slow model until those are broken out. `overhead` is
+whatever the round trip cost beyond the server's own accounting.
+
+While a probe is in flight the screen counts up (`waiting for the model… 3.2s`)
+rather than sitting on a motionless message.
 
 Latency is measured locally, so it is always shown. Token counts come from the
 response's `usage` block and the rate from llama.cpp's `timings` extension; when
@@ -282,9 +392,53 @@ They verify that `/health` answers, that `/v1/models` is parsed, and that port
 detection sees the listener — the three things a mocked test cannot confirm
 about the llama-server build actually installed.
 
+## Quitting
+
+`q` quits outright when nothing is in flight. When something is, it names what
+would be abandoned and asks:
+
+```
+┌ Work in progress ────────────────────────────────────────────────┐
+│  Quitting now would abandon:                                     │
+│    · downloading gemma4-31b (2.1G of 6.7G · 31%)                 │
+│                                                                  │
+│  The server is stopped on exit either way.                       │
+│  Quit anyway?   [y] yes   [any other key] stay                   │
+└──────────────────────────────────────────────────────────────────┘
+```
+
+`Q` skips the question. A *running server* is deliberately not a reason to ask —
+it is stopped on exit every time by design, and prompting on the normal case is
+how you train someone to dismiss prompts unread.
+
+Shutdown stops the downloader as well as the server, and every step is bounded:
+SIGTERM, then SIGKILL, then giving up. A kill that takes twenty seconds cannot
+make the app hang on exit.
+
+## Building a release
+
+```bash
+make release          # verify, bump the patch version, tag, build
+make release-minor    # or -major
+VERSION=1.0.0 make release
+```
+
+It refuses on a dirty tree — a release has to be reproducible from its tag. The
+version is **not** auto-incremented on every release build: a build script
+rewriting `Cargo.toml` would dirty the tree on each `cargo build --release`,
+invalidate its own fingerprint and rebuild in a loop, and produce numbers that
+count builds rather than releases. Individual builds are told apart by the
+commit stamp instead.
+
 ## Behavior notes
 
 - Logs are capped at 500 entries; multi-line output is split into separate entries before the cap is applied.
 - `sh <command>` is bounded by a 30s timeout; failures show `exit <code>: <stderr>` or `timeout after 30s`.
 - If a command task panics or is cancelled, the UI still receives a `task aborted` completion so the prompt never gets stuck.
 - Rendering is a pure function of the app state and is covered by tests against a headless backend, including a 20x6 terminal.
+- A batch of events costs one frame, not one frame each: a loading `llama-server` emits its output in bursts of hundreds of lines.
+- At rest herd does not redraw at all. Only the clocks advance on their own, so a tick with none on screen skips the draw — that is 80ms of CPU per 30s idle down to 30ms.
+- Idle footprint is ~10.5 MB RSS, which is why the runtime is left alone: the memory that matters is the model's.
+- `STARTING` says which part it is in — binding the port, downloading weights, or loading them — with the elapsed time. Four minutes of a bare "STARTING" is indistinguishable from a hang.
+- `/health` is polled for the whole life of a launch, not just until the first success. A server that goes quiet while its process stays alive is marked as not responding rather than left reading `SERVING`.
+- A failed launch is diagnosed rather than reported raw: `SIGKILL` reads "killed by the system — most likely out of memory", with the preset's estimate and your budget alongside when the size was already a concern.

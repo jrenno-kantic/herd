@@ -1,11 +1,12 @@
 id: herd
 name: HERD
-version: 2.2.0
-date: 2026-08-10
+version: 2.3.0
+date: 2026-08-11
 
 description: >
   Terminal launcher for local LLMs. Browse the model presets in a
-  llama-server models.ini, launch one, monitor its lifecycle, and
+  llama-server models.ini, see which are actually on the machine,
+  fetch the ones that are not, launch one, monitor its lifecycle, and
   override server and model options for the session.
 
 tech:
@@ -19,3 +20,4 @@ goals:
   - trustworthy state: the displayed lifecycle reflects the real process
   - never mutate the user's hand-maintained models.ini
   - non-blocking UI: no I/O on the render path
+  - never claim what cannot be measured: unknown is a valid answer

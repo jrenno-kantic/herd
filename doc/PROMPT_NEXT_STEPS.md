@@ -357,6 +357,30 @@ RAM disponible. Le détail des invariants est dans `CLAUDE.md` ; en résumé :
    `MTP` (sélectionné à tort comme artefact de 0 octet), et expose deux
    `mmproj` (BF16 et F16) dont un seul est nécessaire.
 
+## Disponibilité, arrêt et coût à vide (2026-08-11, suite)
+
+1. **`--cache-list` fait autorité, et le téléchargement est vérifié.** Un code
+   de sortie 0 de `hf` ne prouve pas que le modèle est utilisable : c'est
+   llama.cpp qui en décide. On re-interroge donc le cache après coup, au lieu
+   d'annoncer « downloaded » pendant que la ligne reste « not local ».
+2. **Télécharger n'est pas échouer à écouter.** llama-server télécharge ses
+   propres poids quand un lancement ne les trouve pas ; 16 Gio dépassent
+   largement `BIND_BUDGET`, et la sonde déclarait donc mort un téléchargement
+   parfaitement sain au bout de 90 s. `Phase::Downloading` nomme cet état, les
+   budgets partent du dernier octet reçu, et seuls les octets postérieurs au
+   lancement comptent (un téléchargement tué laisse son partiel derrière lui).
+3. **Course à l'arrêt.** La sonde vérifiait « ce lancement est-il toujours le
+   mien » *avant* de sonder, puis attendait jusqu'à 3 s. Un `stop` tombant dans
+   cette fenêtre avait déjà annoncé OFF ; la sonde écrivait par-dessus et
+   l'application restait en ERROR. Elle re-vérifie désormais avant d'émettre.
+   Et `s` efface une erreur périmée : `is_live()` étant faux, rien ne
+   l'effaçait auparavant.
+4. **Coût à vide mesuré.** 10,5 Mio RSS — négligeable face aux 8–17 Gio du
+   serveur, donc le runtime est laissé tel quel. En revanche le tick de 250 ms
+   redessinait 4 fois par seconde un écran inchangé : **80 ms → 30 ms de CPU
+   par 30 s**. Un tick ne redessine plus que si une horloge est à l'écran.
+   Essayé puis **annulé** : réduire les features tokio (aucun gain mesurable).
+
 ## Limites connues à améliorer
 
 1. **Pas de redémarrage automatique en cas de crash.** `ServerState::Error` est
