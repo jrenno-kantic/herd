@@ -140,6 +140,9 @@ Le dépôt embarque désormais un instantané des paliers de presets :
 data/
 ├── 16gb/models.ini      13 presets (4B à 27B)
 ├── 32gb/models.ini       8 presets (12B à 35B)
+├── scripts/llama-launch.js
+├── scripts/test_call.sh
+└── start-router.sh
 ```
 
 Copie conforme de `~/models/`, aux deux fichiers près qui n'ont pas été repris :
@@ -180,7 +183,7 @@ les lancements résolvent les presets contre l'ancien palier et échouent en
 
 ## L'écran Test
 
-Portage de l'ancien `test_call.sh` : même `SYSTEM_PROMPT`, même message par
+Portage de `data/scripts/test_call.sh` : même `SYSTEM_PROMPT`, même message par
 défaut (`Bonjour`), même requête non-streamée. Garder ces constantes alignées
 sur le script — elles existent pour que les deux soient comparables.
 
