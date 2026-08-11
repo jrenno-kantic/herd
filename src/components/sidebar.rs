@@ -45,7 +45,10 @@ pub fn view(app: &App) -> Paragraph<'static> {
 
     Paragraph::new(lines).block(
         Block::default()
-            .title("HERD")
+            // The version rides in the frame rather than taking a line of
+            // its own: it is wanted once, when someone is writing down
+            // which build misbehaved, and never otherwise.
+            .title(format!("HERD {}", crate::version::short()))
             .borders(Borders::ALL)
             .border_style(Theme::border()),
     )

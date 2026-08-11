@@ -7,6 +7,7 @@ mod layout;
 mod services;
 mod theme;
 mod tui;
+mod version;
 
 use anyhow::Result;
 use app::{Action, App};
@@ -27,6 +28,7 @@ Options:
                        Overrides $HERD_LLAMA_CONFIG and the RAM tier
                        auto-detected under ~/models (16gb/, 32gb/, ...).
   -h, --help           Show this help and exit.
+  -V, --version        Show the version and the commit it was built from.
 ";
 
 /// How many already-queued events to fold into one frame. Large enough to
@@ -40,6 +42,10 @@ async fn main() -> Result<()> {
         Ok(Cli::Run { config }) => config,
         Ok(Cli::Help) => {
             print!("{USAGE}");
+            return Ok(());
+        }
+        Ok(Cli::Version) => {
+            println!("{}", version::long());
             return Ok(());
         }
         Err(error) => {
@@ -148,6 +154,7 @@ async fn main() -> Result<()> {
 enum Cli {
     Run { config: Option<PathBuf> },
     Help,
+    Version,
 }
 
 /// Hand-rolled rather than pulling in a parser crate for two flags.
@@ -158,6 +165,7 @@ fn parse_args(args: impl Iterator<Item = String>) -> Result<Cli, String> {
     while let Some(arg) = args.next() {
         match arg.as_str() {
             "-h" | "--help" => return Ok(Cli::Help),
+            "-V" | "--version" => return Ok(Cli::Version),
             "-c" | "--config" => match args.next() {
                 Some(path) if !path.is_empty() => config = Some(PathBuf::from(path)),
                 _ => return Err(format!("{arg} requires a path")),
@@ -215,5 +223,14 @@ mod tests {
     #[test]
     fn help_wins_over_a_preceding_config() {
         assert_eq!(parse(&["--config", "/tmp/a.ini", "--help"]), Ok(Cli::Help));
+    }
+
+    /// Asking which build this is must never start a TUI, whatever else
+    /// is on the line — it is the first thing a bug report needs.
+    #[test]
+    fn version_is_answered_without_starting_anything() {
+        assert_eq!(parse(&["--version"]), Ok(Cli::Version));
+        assert_eq!(parse(&["-V"]), Ok(Cli::Version));
+        assert_eq!(parse(&["--config", "/tmp/a.ini", "-V"]), Ok(Cli::Version));
     }
 }

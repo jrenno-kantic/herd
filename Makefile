@@ -1,4 +1,4 @@
-# Dev-loop targets for ops-tui.
+# Dev-loop targets for herd.
 # Run `make help` to list everything.
 
 BLUE  := \033[34m
@@ -12,7 +12,8 @@ CARGO_PKG_NAME := $(shell awk '/^\[package\]/ {in_package=1; next} /^\[/ {in_pac
 TARGET_CACHE_DIR ?= $(HOME)/.cache/cargo-targets/$(CARGO_PKG_NAME)
 
 .PHONY: help fmt fmt-check lint lint-fix audit check build build-release run \
-        run-release test coverage verify clean setup-target teardown-target
+        run-release test coverage verify clean setup-target teardown-target \
+        version release release-minor release-major
 
 help: ## Show this help.
 	@echo "Usage:"
@@ -68,6 +69,52 @@ run: ## Launch the TUI in debug mode.
 run-release: ## Launch the optimized TUI.
 	@echo "$(BLUE)Launching the release TUI (q to quit)...$(RESET)"
 	cargo run --release
+
+#########################
+# Releasing
+#########################
+
+# Versioning is deliberately *not* automatic on every release build.
+#
+# A build script that rewrote Cargo.toml would dirty the tree on every
+# `cargo build --release`, invalidate its own fingerprint and rebuild in a
+# loop, and produce version numbers that mean nothing because they count
+# builds rather than releases. So the number is bumped when a release is
+# cut, by asking for one — and every build in between is identified by the
+# commit stamp that `build.rs` bakes in, which is the part that actually
+# distinguishes one binary from another.
+
+version: ## Print the version and the commit this tree would build.
+	@cargo run --quiet -- --version
+
+release: ## Cut a patch release: verify, bump, tag, build. VERSION=x.y.z to set it outright.
+	@$(MAKE) --no-print-directory do-release BUMP=patch
+release-minor: ## Cut a minor release.
+	@$(MAKE) --no-print-directory do-release BUMP=minor
+release-major: ## Cut a major release.
+	@$(MAKE) --no-print-directory do-release BUMP=major
+
+.PHONY: do-release
+do-release:
+	@test -z "$$(git status --porcelain)" || { \
+		echo "$(RED)Working tree is dirty. Commit or stash first —$(RESET)"; \
+		echo "$(RED)a release must be reproducible from its tag.$(RESET)"; \
+		exit 1; }
+	@$(MAKE) --no-print-directory verify
+	@current=$$(awk -F\" '/^version = /{print $$2; exit}' Cargo.toml); \
+	 next=$${VERSION:-$$(echo $$current | awk -F. -v part=$(BUMP) '{ \
+	    if (part=="major") printf "%d.0.0", $$1+1; \
+	    else if (part=="minor") printf "%d.%d.0", $$1, $$2+1; \
+	    else printf "%d.%d.%d", $$1, $$2, $$3+1 }')); \
+	 echo "$(BLUE)Releasing $$current -> $$next$(RESET)"; \
+	 sed -i.bak "1,/^version = /s/^version = \".*\"/version = \"$$next\"/" Cargo.toml && rm -f Cargo.toml.bak; \
+	 cargo check --quiet; \
+	 git add Cargo.toml Cargo.lock; \
+	 git commit -q -m "release: v$$next"; \
+	 git tag -a "v$$next" -m "herd v$$next"; \
+	 cargo build --release; \
+	 echo "$(GREEN)v$$next tagged and built.$(RESET)"; \
+	 echo "Undo with: git tag -d v$$next && git reset --hard HEAD~1"
 
 #########################
 # Tests and verification
