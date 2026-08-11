@@ -29,4 +29,25 @@ impl Theme {
     pub fn border() -> Style {
         Style::default().fg(Color::DarkGray).bg(Color::Black)
     }
+
+    pub fn status_ready() -> Style {
+        Style::default()
+            .fg(Color::Green)
+            .bg(Color::Black)
+            .add_modifier(Modifier::BOLD)
+    }
+
+    pub fn status_starting() -> Style {
+        Style::default()
+            .fg(Color::Yellow)
+            .bg(Color::Black)
+            .add_modifier(Modifier::BOLD)
+    }
+
+    pub fn status_error() -> Style {
+        Style::default()
+            .fg(Color::Red)
+            .bg(Color::Black)
+            .add_modifier(Modifier::BOLD)
+    }
 }

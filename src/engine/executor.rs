@@ -1,17 +1,243 @@
-use crate::{event::UiEvent, services};
+use crate::event::UiEvent;
+use crate::services;
+use crate::services::llama;
+use crate::services::llama::{LauncherMode, LlamaSnapshot, ServerState, Supervisor};
+use std::path::PathBuf;
+use std::sync::{Arc, RwLock};
 use tokio::sync::mpsc;
 
 #[derive(Clone)]
 pub struct Executor {
     tx: mpsc::UnboundedSender<UiEvent>,
+    llama: Supervisor,
+    /// The active `models.ini`. Resolved at startup and kept in step with
+    /// `App` when the user switches tier, so the Models screen and the
+    /// Executor can never disagree about which file is in play.
+    config_path: Arc<RwLock<PathBuf>>,
 }
 
 impl Executor {
-    pub fn new(tx: mpsc::UnboundedSender<UiEvent>) -> Self {
-        Self { tx }
+    pub fn new(tx: mpsc::UnboundedSender<UiEvent>, config_path: PathBuf) -> Self {
+        Self {
+            tx,
+            llama: Supervisor::new(),
+            config_path: Arc::new(RwLock::new(config_path)),
+        }
     }
 
+    /// Follows a tier switch made in the UI. Without this, launching after
+    /// pressing `t` would resolve the preset against the *previous* tier's
+    /// file and fail with "unknown model".
+    pub fn set_config_path(&self, path: PathBuf) {
+        if let Ok(mut slot) = self.config_path.write() {
+            *slot = path;
+        }
+    }
+
+    /// Snapshot of the active path. Cloned out immediately so no lock is
+    /// ever held across an await point.
+    fn config_path(&self) -> PathBuf {
+        self.config_path
+            .read()
+            .map(|slot| slot.clone())
+            .unwrap_or_default()
+    }
+
+    /// Dispatches a submitted `:command`. llama-server lifecycle commands
+    /// (`launch`, `router`, `stop`, `ping`, `status`) are handled here
+    /// because they need access to the shared `Supervisor`; everything
+    /// else falls back to the generic "run once, report the output"
+    /// path used by the pre-existing `services::scripts` commands.
     pub fn run_command(&self, command: String) {
+        let trimmed = command.trim();
+
+        // `launch!` is the same command with the port-in-use check already
+        // answered by the user; it is emitted by the confirmation prompt,
+        // never typed.
+        if trimmed == "launch!" || trimmed.starts_with("launch! ") {
+            let rest = trimmed
+                .strip_prefix("launch!")
+                .unwrap_or("")
+                .trim()
+                .to_string();
+            return self.spawn_launch(rest, true);
+        }
+        if trimmed == "launch" || trimmed.starts_with("launch ") {
+            let rest = trimmed
+                .strip_prefix("launch")
+                .unwrap_or("")
+                .trim()
+                .to_string();
+            return self.spawn_launch(rest, false);
+        }
+        if trimmed == "router" || trimmed.starts_with("router ") {
+            let rest = trimmed
+                .strip_prefix("router")
+                .unwrap_or("")
+                .trim()
+                .to_string();
+            return self.spawn_router(rest);
+        }
+        if trimmed == "stop" {
+            return self.spawn_stop();
+        }
+        if trimmed == "ping" || trimmed.starts_with("ping ") {
+            let model = trimmed
+                .strip_prefix("ping")
+                .unwrap_or("")
+                .trim()
+                .to_string();
+            return self.spawn_ping(model);
+        }
+        if trimmed == "status" {
+            return self.spawn_status();
+        }
+
+        self.spawn_quick(command);
+    }
+
+    /// Stops the supervised llama-server process, if any. Called once from
+    /// `main.rs` right after the event loop exits so quitting herd
+    /// never leaves an orphaned server holding GPU memory.
+    pub async fn shutdown(&self) {
+        self.llama.stop().await;
+    }
+
+    /// Sends a chat probe (the `test_call.sh` equivalent) and reports the
+    /// structured outcome. Deliberately outside the `running` flag: a
+    /// probe can take a while against a large model, and it must not lock
+    /// the user out of stopping the server meanwhile.
+    pub fn run_chat(&self, model: String, prompt: String) {
+        let tx = self.tx.clone();
+        let config_path = self.config_path();
+
+        tokio::spawn(async move {
+            let guard = ChatGuard::new(tx.clone());
+
+            let result = match llama::load(&config_path) {
+                Err(error) => Err(format!("config error: {error}")),
+                Ok(config) => {
+                    let base = llama::api::base_url(&config.client_host(), config.port());
+                    llama::api::chat(&base, &model, &prompt).await
+                }
+            };
+
+            guard.complete(result);
+        });
+    }
+
+    /// Asks llama.cpp what it already has, and tells the UI.
+    ///
+    /// Fire and forget: the answer is an improvement on "unknown", never
+    /// something the app waits for, so a machine without `llama-server` on
+    /// its PATH simply keeps showing nothing rather than blocking.
+    pub fn refresh_cache(&self) {
+        let tx = self.tx.clone();
+
+        tokio::spawn(async move {
+            match llama::hub::cache_list().await {
+                Ok(cached) => {
+                    let _ = tx.send(UiEvent::CacheList(cached));
+                }
+                Err(error) => {
+                    let _ = tx.send(UiEvent::Log(format!(
+                        "could not read the model cache: {error}"
+                    )));
+                }
+            }
+        });
+    }
+
+    /// Downloads the artifacts a preset needs, then optionally launches it.
+    ///
+    /// Progress is *measured*, not parsed: `hf` reports only how many
+    /// files it has finished, which would leave the bar at 0% for the
+    /// whole of a 6.7 GB weights file. A poller watches the bytes landing
+    /// in the hub cache instead, so the bar moves smoothly and ends
+    /// exactly on the total.
+    pub fn run_download(
+        &self,
+        model: String,
+        reference: String,
+        wants: llama::hub::Wants,
+        then_launch: bool,
+    ) {
+        let tx = self.tx.clone();
+        let executor = self.clone();
+
+        tokio::spawn(async move {
+            let guard = CompletionGuard::new(tx.clone(), format!("download {model}"));
+            let (repo, tag) = {
+                let (repo, tag) = llama::hub::split_repo(&reference);
+                (repo.to_string(), tag.map(str::to_string))
+            };
+
+            let files = match llama::hub::tree(&repo).await {
+                Ok(files) => llama::hub::select(&files, tag.as_deref(), wants),
+                Err(error) => {
+                    let _ = tx.send(UiEvent::DownloadFinished {
+                        model: model.clone(),
+                        result: Box::new(Err(error.clone())),
+                    });
+                    return guard.complete(error);
+                }
+            };
+
+            if files.is_empty() {
+                let reason = format!("nothing in {repo} matches the quant tag in '{reference}'");
+                let _ = tx.send(UiEvent::DownloadFinished {
+                    model: model.clone(),
+                    result: Box::new(Err(reason.clone())),
+                });
+                return guard.complete(reason);
+            }
+
+            let total: u64 = files.iter().map(|file| file.size).sum();
+            let _ = tx.send(UiEvent::Log(format!(
+                "$ {} {}",
+                llama::hub::DOWNLOADER,
+                llama::hub::download_args(&repo, &files).join(" ")
+            )));
+
+            let progress = spawn_progress_poller(
+                tx.clone(),
+                model.clone(),
+                repo.clone(),
+                files.clone(),
+                total,
+            );
+            let outcome = fetch(&repo, &files, &tx).await;
+            progress.abort();
+
+            let summary = match &outcome {
+                Ok(()) => {
+                    // One last tick so the bar lands on 100% rather than
+                    // wherever the poller happened to stop.
+                    let _ = tx.send(UiEvent::DownloadProgress {
+                        model: model.clone(),
+                        done: total,
+                        total,
+                    });
+                    format!("{model} downloaded ({})", llama::hub::human_bytes(total))
+                }
+                Err(error) => error.clone(),
+            };
+
+            let _ = tx.send(UiEvent::DownloadFinished {
+                model: model.clone(),
+                result: Box::new(outcome.clone().map(|()| summary.clone())),
+            });
+            executor.refresh_cache();
+
+            if outcome.is_ok() && then_launch {
+                executor.run_command(format!("launch {model}"));
+            }
+
+            guard.complete(summary);
+        });
+    }
+
+    fn spawn_quick(&self, command: String) {
         let tx = self.tx.clone();
 
         tokio::spawn(async move {
@@ -20,6 +246,322 @@ impl Executor {
             guard.complete(output);
         });
     }
+
+    fn spawn_launch(&self, rest: String, force: bool) {
+        let tx = self.tx.clone();
+        let supervisor = self.llama.clone();
+        let config_path = self.config_path();
+
+        tokio::spawn(async move {
+            let guard = CompletionGuard::new(tx.clone(), format!("launch {rest}"));
+
+            let (model, extra) = split_extra_args(&rest);
+            if model.is_empty() {
+                guard.complete("usage: launch <model> [-- extra llama-server args]".into());
+                return;
+            }
+
+            let config = match llama::load(&config_path) {
+                Ok(config) => config,
+                Err(error) => return guard.complete(format!("config error: {error}")),
+            };
+
+            let host = config.client_host();
+            let port = config.port();
+
+            // Only worth asking when the port is held by something else.
+            // If herd owns the process, `spawn` hot-swaps it cleanly.
+            if !force
+                && !supervisor.is_running().await
+                && llama::api::port_in_use_settled(&host, port).await
+            {
+                let _ = tx.send(UiEvent::PortInUse {
+                    port,
+                    model: model.clone(),
+                });
+                return guard.complete(format!("port {port} busy, waiting for confirmation"));
+            }
+
+            let args = match llama::ini::build_model_args(&config, &model, &extra) {
+                Ok(args) => args,
+                Err(error) => return guard.complete(error),
+            };
+
+            let base_url = llama::api::base_url(&host, port);
+            let output = match supervisor
+                .spawn(
+                    LauncherMode::Manual,
+                    Some(model.clone()),
+                    args,
+                    base_url,
+                    tx.clone(),
+                )
+                .await
+            {
+                Ok(()) => format!("spawning llama-server for '{model}'"),
+                Err(error) => {
+                    send_error(&tx, LauncherMode::Manual, Some(model.clone()), &error);
+                    error
+                }
+            };
+
+            guard.complete(output);
+        });
+    }
+
+    fn spawn_router(&self, rest: String) {
+        let tx = self.tx.clone();
+        let supervisor = self.llama.clone();
+        let config_path = self.config_path();
+
+        tokio::spawn(async move {
+            let guard =
+                CompletionGuard::new(tx.clone(), format!("router {rest}").trim().to_string());
+            let (models_max, sleep_idle, extra) = parse_router_flags(&rest);
+
+            let output = match llama::load(&config_path) {
+                Err(error) => format!("config error: {error}"),
+                Ok(config) => {
+                    let args =
+                        llama::ini::build_router_args(&config, models_max, sleep_idle, &extra);
+                    let base_url = llama::api::base_url(&config.client_host(), config.port());
+                    match supervisor
+                        .spawn(LauncherMode::Router, None, args, base_url, tx.clone())
+                        .await
+                    {
+                        Ok(()) => format!(
+                            "spawning llama-server router (models-max={models_max}, sleep-idle={sleep_idle}s)"
+                        ),
+                        Err(error) => {
+                            send_error(&tx, LauncherMode::Router, None, &error);
+                            error
+                        }
+                    }
+                }
+            };
+
+            guard.complete(output);
+        });
+    }
+
+    fn spawn_stop(&self) {
+        let tx = self.tx.clone();
+        let supervisor = self.llama.clone();
+
+        tokio::spawn(async move {
+            let guard = CompletionGuard::new(tx.clone(), "stop".into());
+
+            guard.complete(supervisor.stop_announced(&tx).await.label().to_string());
+        });
+    }
+
+    fn spawn_ping(&self, model: String) {
+        let tx = self.tx.clone();
+        let config_path = self.config_path();
+
+        tokio::spawn(async move {
+            let guard = CompletionGuard::new(tx.clone(), format!("ping {model}"));
+
+            if model.is_empty() {
+                guard.complete("usage: ping <model>".into());
+                return;
+            }
+
+            let output = match llama::load(&config_path) {
+                Err(error) => format!("config error: {error}"),
+                Ok(config) => {
+                    let base = llama::api::base_url(&config.client_host(), config.port());
+                    match llama::api::test_chat(&base, &model).await {
+                        Ok(reply) => format!("{model} -> {reply}"),
+                        Err(error) => format!("{model} -> error: {error}"),
+                    }
+                }
+            };
+
+            guard.complete(output);
+        });
+    }
+
+    fn spawn_status(&self) {
+        let tx = self.tx.clone();
+        let config_path = self.config_path();
+
+        tokio::spawn(async move {
+            let guard = CompletionGuard::new(tx.clone(), "status".into());
+
+            let output = match llama::load(&config_path) {
+                Err(error) => format!("config error: {error}"),
+                Ok(config) => {
+                    let base = llama::api::base_url(&config.client_host(), config.port());
+                    match llama::api::list_models(&base).await {
+                        Ok(models) if models.is_empty() => {
+                            format!("{base} reachable, no models currently loaded")
+                        }
+                        Ok(models) => format!("{base} reachable, loaded: {}", models.join(", ")),
+                        Err(error) => format!("{base} unreachable: {error}"),
+                    }
+                }
+            };
+
+            guard.complete(output);
+        });
+    }
+}
+
+/// How often to re-measure the bytes on disk while downloading.
+const PROGRESS_INTERVAL: std::time::Duration = std::time::Duration::from_millis(500);
+
+/// Runs `hf download`, streaming its output into the logs panel.
+///
+/// The CLI owns the hub cache layout — blobs, snapshot symlinks, refs —
+/// which is the part that must not be got wrong, so it is left to do it.
+async fn fetch(
+    repo: &str,
+    files: &[llama::hub::RepoFile],
+    tx: &mpsc::UnboundedSender<UiEvent>,
+) -> Result<(), String> {
+    use tokio::io::{AsyncBufReadExt, BufReader};
+
+    let mut child = tokio::process::Command::new(llama::hub::DOWNLOADER)
+        .args(llama::hub::download_args(repo, files))
+        // `hf` suppresses its progress entirely when stderr is not a
+        // terminal unless this is set; without it the logs panel shows
+        // nothing at all until the download ends.
+        .env("HF_HUB_DISABLE_PROGRESS_BARS", "0")
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .kill_on_drop(true)
+        .spawn()
+        .map_err(|error| {
+            format!(
+                "failed to run {}: {error} (is it on your PATH?)",
+                llama::hub::DOWNLOADER
+            )
+        })?;
+
+    if let Some(stderr) = child.stderr.take() {
+        let tx = tx.clone();
+        tokio::spawn(async move {
+            let mut lines = BufReader::new(stderr).lines();
+            while let Ok(Some(line)) = lines.next_line().await {
+                // tqdm redraws with carriage returns, so one "line" can
+                // carry a whole download's worth of frames. Only the last
+                // is current.
+                if let Some(latest) = line.rsplit('\r').find(|part| !part.trim().is_empty()) {
+                    let _ = tx.send(UiEvent::Log(latest.trim().to_string()));
+                }
+            }
+        });
+    }
+
+    let status = child
+        .wait()
+        .await
+        .map_err(|error| format!("{} did not finish: {error}", llama::hub::DOWNLOADER))?;
+
+    if status.success() {
+        Ok(())
+    } else {
+        Err(format!("{} exited with {status}", llama::hub::DOWNLOADER))
+    }
+}
+
+/// Watches the bytes landing in the hub cache and reports them.
+fn spawn_progress_poller(
+    tx: mpsc::UnboundedSender<UiEvent>,
+    model: String,
+    repo: String,
+    files: Vec<llama::hub::RepoFile>,
+    total: u64,
+) -> tokio::task::JoinHandle<()> {
+    tokio::spawn(async move {
+        let Some(hub) = llama::hub::hub_dir() else {
+            return;
+        };
+        let dir = llama::hub::repo_dir(&hub, &repo);
+
+        loop {
+            let done = llama::hub::downloaded_bytes(&dir, &files);
+            if tx
+                .send(UiEvent::DownloadProgress {
+                    model: model.clone(),
+                    done: done.min(total),
+                    total,
+                })
+                .is_err()
+            {
+                return;
+            }
+            tokio::time::sleep(PROGRESS_INTERVAL).await;
+        }
+    })
+}
+
+fn send_error(
+    tx: &mpsc::UnboundedSender<UiEvent>,
+    mode: LauncherMode,
+    model: Option<String>,
+    error: &str,
+) {
+    let _ = tx.send(UiEvent::LlamaStatus(LlamaSnapshot::new(
+        ServerState::Error(error.to_string()),
+        mode,
+        model,
+    )));
+}
+
+/// Splits `"<model> -- <extra llama-server args>"` the same way the shell
+/// would, without needing a shell: everything before a bare `--` token is
+/// the model name, everything after is passed straight through as CLI
+/// overrides.
+fn split_extra_args(rest: &str) -> (String, Vec<String>) {
+    match rest.split_once("--") {
+        Some((model, extra)) => (
+            model.trim().to_string(),
+            extra.split_whitespace().map(str::to_string).collect(),
+        ),
+        None => (rest.trim().to_string(), Vec::new()),
+    }
+}
+
+/// Parses `router [--max N] [--idle S]`, defaulting to the same values as
+/// `startrouter.sh` (`--models-max 2 --sleep-idle-seconds 300`). Anything
+/// else on the line is forwarded as extra llama-server flags.
+fn parse_router_flags(rest: &str) -> (u32, u32, Vec<String>) {
+    let mut models_max = 2;
+    let mut sleep_idle = 300;
+    let mut extra = Vec::new();
+
+    let tokens: Vec<&str> = rest.split_whitespace().collect();
+    let mut i = 0;
+    while i < tokens.len() {
+        match tokens[i] {
+            "--max"
+                if tokens
+                    .get(i + 1)
+                    .and_then(|v| v.parse::<u32>().ok())
+                    .is_some() =>
+            {
+                models_max = tokens[i + 1].parse().unwrap();
+                i += 2;
+            }
+            "--idle"
+                if tokens
+                    .get(i + 1)
+                    .and_then(|v| v.parse::<u32>().ok())
+                    .is_some() =>
+            {
+                sleep_idle = tokens[i + 1].parse().unwrap();
+                i += 2;
+            }
+            other => {
+                extra.push(other.to_string());
+                i += 1;
+            }
+        }
+    }
+
+    (models_max, sleep_idle, extra)
 }
 
 // Ensures `CommandFinished` is always sent — even if the task panics or is
@@ -44,6 +586,35 @@ impl CompletionGuard {
     }
 }
 
+/// Same contract as [`CompletionGuard`], for chat probes: the UI clears
+/// its "in flight" flag on `ChatResult`, so exactly one must always be
+/// sent — including if the task panics or is dropped mid-request.
+struct ChatGuard {
+    tx: mpsc::UnboundedSender<UiEvent>,
+    done: bool,
+}
+
+impl ChatGuard {
+    fn new(tx: mpsc::UnboundedSender<UiEvent>) -> Self {
+        Self { tx, done: false }
+    }
+
+    fn complete(mut self, result: Result<llama::api::ChatOutcome, String>) {
+        self.done = true;
+        let _ = self.tx.send(UiEvent::ChatResult(Box::new(result)));
+    }
+}
+
+impl Drop for ChatGuard {
+    fn drop(&mut self) {
+        if !self.done {
+            let _ = self
+                .tx
+                .send(UiEvent::ChatResult(Box::new(Err("test aborted".into()))));
+        }
+    }
+}
+
 impl Drop for CompletionGuard {
     fn drop(&mut self) {
         if let Some(command) = self.command.take() {
@@ -58,6 +629,12 @@ impl Drop for CompletionGuard {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// These tests exercise dispatch paths that never read `models.ini`,
+    /// so the path only has to be unambiguous, not real.
+    fn no_config() -> PathBuf {
+        PathBuf::from("/nonexistent/herd/models.ini")
+    }
 
     #[tokio::test]
     async fn complete_sends_command_finished() {
@@ -112,7 +689,7 @@ mod tests {
     #[tokio::test]
     async fn executor_run_command_emits_completion() {
         let (tx, mut rx) = mpsc::unbounded_channel();
-        let executor = Executor::new(tx);
+        let executor = Executor::new(tx, no_config());
         executor.run_command("help".into());
 
         match rx.recv().await.expect("event") {
@@ -121,5 +698,84 @@ mod tests {
             }
             other => panic!("expected CommandFinished, got {:?}", other),
         }
+    }
+
+    #[tokio::test]
+    async fn stop_with_nothing_running_reports_that() {
+        let (tx, mut rx) = mpsc::unbounded_channel();
+        let executor = Executor::new(tx, no_config());
+        executor.run_command("stop".into());
+
+        // Stopping nothing must not announce a STOPPING -> OFF transition:
+        // the UI would flash a state change that never happened.
+        match rx.recv().await.expect("event") {
+            UiEvent::CommandFinished { command, output } => {
+                assert_eq!(command, "stop");
+                assert_eq!(output, "nothing was running");
+            }
+            other => panic!("expected CommandFinished only, got {other:?}"),
+        }
+        assert!(rx.try_recv().is_err(), "no status event for a no-op stop");
+    }
+
+    /// The confirmation prompt re-dispatches as `launch!`, which must be
+    /// recognised as a launch rather than falling through to the generic
+    /// script path.
+    #[tokio::test]
+    async fn forced_launch_without_a_model_reports_usage() {
+        let (tx, mut rx) = mpsc::unbounded_channel();
+        let executor = Executor::new(tx, no_config());
+        executor.run_command("launch!".into());
+
+        match rx.recv().await.expect("event") {
+            UiEvent::CommandFinished { output, .. } => {
+                assert!(output.starts_with("usage:"), "got: {output}");
+            }
+            other => panic!("expected CommandFinished, got {:?}", other),
+        }
+    }
+
+    #[tokio::test]
+    async fn launch_without_model_reports_usage() {
+        let (tx, mut rx) = mpsc::unbounded_channel();
+        let executor = Executor::new(tx, no_config());
+        executor.run_command("launch".into());
+
+        match rx.recv().await.expect("event") {
+            UiEvent::CommandFinished { output, .. } => {
+                assert!(output.starts_with("usage:"));
+            }
+            other => panic!("expected CommandFinished, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn split_extra_args_separates_model_and_overrides() {
+        let (model, extra) = split_extra_args("gemma4-12b -- --ctx-size 65536");
+        assert_eq!(model, "gemma4-12b");
+        assert_eq!(extra, vec!["--ctx-size", "65536"]);
+    }
+
+    #[test]
+    fn split_extra_args_without_double_dash() {
+        let (model, extra) = split_extra_args("gemma4-12b");
+        assert_eq!(model, "gemma4-12b");
+        assert!(extra.is_empty());
+    }
+
+    #[test]
+    fn parse_router_flags_defaults_match_startrouter_sh() {
+        let (models_max, sleep_idle, extra) = parse_router_flags("");
+        assert_eq!(models_max, 2);
+        assert_eq!(sleep_idle, 300);
+        assert!(extra.is_empty());
+    }
+
+    #[test]
+    fn parse_router_flags_overrides() {
+        let (models_max, sleep_idle, extra) = parse_router_flags("--max 3 --idle 120 --port 5555");
+        assert_eq!(models_max, 3);
+        assert_eq!(sleep_idle, 120);
+        assert_eq!(extra, vec!["--port", "5555"]);
     }
 }

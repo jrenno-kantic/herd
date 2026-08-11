@@ -1,3 +1,4 @@
+use crate::services::llama::{api::ChatOutcome, LlamaSnapshot};
 use crossterm::event::{self, Event, KeyEvent, KeyEventKind};
 use std::sync::{
     atomic::{AtomicBool, Ordering},
@@ -10,7 +11,53 @@ use tokio::sync::mpsc;
 pub enum UiEvent {
     Key(KeyEvent),
     Tick,
-    CommandFinished { command: String, output: String },
+    CommandFinished {
+        command: String,
+        output: String,
+    },
+    /// A single line streamed from a long-running supervised process
+    /// (llama-server). Appended to the logs panel without touching the
+    /// command bar's `running` state.
+    Log(String),
+    /// The llama-server supervisor changed state (spawned, became ready,
+    /// exited, failed to start...).
+    LlamaStatus(LlamaSnapshot),
+    /// The configured port is already bound by a process herd did not
+    /// start. The UI asks before launching rather than killing something
+    /// it has no claim over.
+    PortInUse {
+        port: u16,
+        model: String,
+    },
+    /// A chat probe finished (the `test_call.sh` equivalent). Carries the
+    /// structured outcome rather than a formatted line, so the Test screen
+    /// can show reply, latency and token stats separately.
+    ChatResult(Box<Result<ChatOutcome, String>>),
+    /// What `llama-server --cache-list` reports it has locally. Refreshed
+    /// on startup, on reload, and after a download.
+    CacheList(Vec<String>),
+    /// A download is in flight. Byte counts, not percentages, so the bar
+    /// and the "2.1G of 6.7G" text come from the same numbers.
+    DownloadProgress {
+        model: String,
+        done: u64,
+        total: u64,
+    },
+    /// It finished — `Ok` with a summary, or `Err` with the reason.
+    DownloadFinished {
+        model: String,
+        result: Box<Result<String, String>>,
+    },
+    /// The terminal was resized. Carried into `App` so the page keys can
+    /// move by a real screenful; `App::update` stays pure, it simply
+    /// remembers the last height it was told about.
+    ///
+    /// Height only: every component is handed its own `Rect` at draw time
+    /// and so already knows its true width, but `App::update` runs nowhere
+    /// near a frame and has no other way to learn how tall the screen is.
+    Resize {
+        height: u16,
+    },
     Quit,
 }
 
@@ -35,6 +82,11 @@ impl EventStream {
                     Ok(true) => match event::read() {
                         Ok(Event::Key(key)) if key.kind == KeyEventKind::Press => {
                             if tx.send(UiEvent::Key(key)).is_err() {
+                                break;
+                            }
+                        }
+                        Ok(Event::Resize(_, height)) => {
+                            if tx.send(UiEvent::Resize { height }).is_err() {
                                 break;
                             }
                         }

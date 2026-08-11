@@ -1,27 +1,52 @@
-use crate::{app::App, theme::Theme};
-use ratatui::widgets::{Block, Borders, List, ListItem};
+use crate::{
+    app::{App, Screen},
+    theme::Theme,
+};
+use ratatui::text::Line;
+use ratatui::widgets::{Block, Borders, Paragraph};
 
-const ITEMS: [&str; 3] = ["scripts", "devices", "logs"];
+pub fn view(app: &App) -> Paragraph<'static> {
+    let mut lines: Vec<Line> = Screen::ALL
+        .iter()
+        .enumerate()
+        .map(|(index, screen)| {
+            let selected = *screen == app.screen;
+            Line::styled(
+                format!(
+                    " {} {} {}",
+                    if selected { "▸" } else { " " },
+                    index + 1,
+                    screen.label()
+                ),
+                if selected {
+                    Theme::selected()
+                } else {
+                    Theme::normal()
+                },
+            )
+        })
+        .collect();
 
-pub fn view(app: &App) -> List<'static> {
-    render_sidebar(&ITEMS, app.selected_sidebar).block(
+    lines.push(Line::from(""));
+    lines.push(Line::styled(
+        format!(" tier  {}", app.llama.tier_name().unwrap_or("-")),
+        Theme::logs(),
+    ));
+    lines.push(Line::styled(
+        format!(
+            " RAM   {}",
+            app.llama
+                .ram_gib
+                .map(|gib| format!("{gib} GiB"))
+                .unwrap_or_else(|| "?".into())
+        ),
+        Theme::logs(),
+    ));
+
+    Paragraph::new(lines).block(
         Block::default()
-            .title("OPS-TUI")
+            .title("HERD")
             .borders(Borders::ALL)
             .border_style(Theme::border()),
     )
-}
-
-fn render_sidebar<'a>(items: &'a [&'a str], selected: usize) -> List<'a> {
-    let items = items.iter().enumerate().map(|(i, item)| {
-        let style = if i == selected {
-            Theme::selected()
-        } else {
-            Theme::normal()
-        };
-
-        ListItem::new(*item).style(style)
-    });
-
-    List::new(items.collect::<Vec<_>>())
 }

@@ -22,6 +22,31 @@ const COMMANDS: &[CommandSpec] = &[
         name: "sh <command>",
         description: "Run a shell command asynchronously and print stdout or stderr.",
     },
+    CommandSpec {
+        name: "models",
+        description: "(Re)load models.ini and list the available llama-server presets.",
+    },
+    CommandSpec {
+        name: "router [--max N] [--idle S]",
+        description: "Launch llama-server in its built-in multi-model router mode.",
+    },
+    CommandSpec {
+        name: "launch <model> [-- args]",
+        description:
+            "Launch llama-server with a single model preset (stops any running instance first).",
+    },
+    CommandSpec {
+        name: "stop",
+        description: "Stop the currently supervised llama-server process.",
+    },
+    CommandSpec {
+        name: "ping <model>",
+        description: "Send a minimal chat completion request (see also the Test screen, key 3).",
+    },
+    CommandSpec {
+        name: "status",
+        description: "Check whether llama-server is reachable and which models are loaded.",
+    },
 ];
 
 pub async fn run_script(name: &str) -> String {
@@ -38,10 +63,10 @@ pub async fn run_script(name: &str) -> String {
     }
 }
 
-fn help_text() -> String {
+pub fn help_text() -> String {
     COMMANDS
         .iter()
-        .map(|command| format!("{:<12} {}", command.name, command.description))
+        .map(|command| format!("{:<28} {}", command.name, command.description))
         .collect::<Vec<_>>()
         .join("\n")
 }
