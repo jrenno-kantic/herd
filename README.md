@@ -174,7 +174,7 @@ Two deliberate omissions worth knowing:
 
 ## Testing the running model
 
-The Test screen is `data/scripts/test_call.sh` as a screen: the same system
+The Test screen is the old `test_call.sh` probe as a screen: the same system
 prompt, the same default message (`Bonjour`), the same non-streaming request —
 but the prompt is editable and the result is measured instead of dumped as raw
 JSON.
@@ -340,9 +340,6 @@ data/
 │                        Gemma 4 12B, Qwen3-VL 8B, Qwen3 14B
 ├── 32gb/models.ini       8 presets, 12B–35B: Gemma 4 12B/26B/31B, Qwen 3.6 27B/35B,
 │                        Qwen3 Coder 30B, Qwen3-VL 8B, Qwen3 14B
-├── scripts/llama-launch.js
-├── scripts/test_call.sh
-└── start-router.sh
 ```
 
 It is **reference and test data, not a runtime config source** — resolution still reads `~/models/`. The test suite parses these files directly, so every shipped preset is checked to parse and to build a launchable argv on every `cargo test`.

@@ -120,8 +120,9 @@ Settings overrides are deliberately excluded.
 ## Shipped preset data (`data/`)
 
 An in-repo snapshot of the user's `~/models/` tiers: `16gb/models.ini`
-(13 presets) and `32gb/models.ini` (8 presets), plus the original
-`llama-launch.js` and `start-router.sh`.
+(13 presets) and `32gb/models.ini` (8 presets). The original `llama-launch.js`,
+`test_call.sh` and `start-router.sh` were kept here at first and have since been
+removed — the Rust code is the source of truth for all three.
 
 Reference and **test fixture only** - config resolution reads `~/models/`, never
 `data/`. The suite parses these files so every shipped preset is proven to parse
