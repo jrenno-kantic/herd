@@ -1,11 +1,12 @@
-id: ops-tui
-name: OPS-TUI
-version: 1.0.0
-date: 2026-05-04
+id: herd
+name: HERD
+version: 2.2.0
+date: 2026-08-10
 
 description: >
-  Terminal-first control system for power users.
-  Combines automation, device control, and scripting in a Rust TUI.
+  Terminal launcher for local LLMs. Browse the model presets in a
+  llama-server models.ini, launch one, monitor its lifecycle, and
+  override server and model options for the session.
 
 tech:
   language: Rust
@@ -13,7 +14,8 @@ tech:
   runtime: tokio
 
 goals:
-  - fast execution
+  - user-friendly: browse and launch, no command line required
   - keyboard-first UX
-  - modular architecture
-  - extensibility via plugins
+  - trustworthy state: the displayed lifecycle reflects the real process
+  - never mutate the user's hand-maintained models.ini
+  - non-blocking UI: no I/O on the render path

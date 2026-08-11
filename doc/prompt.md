@@ -1,4 +1,12 @@
-# Méta-prompt — Ops TUI : console unifiée multi-devices
+# Méta-prompt : Ops TUI, console unifiée multi-devices
+
+> **Document historique.** C'est le méta-prompt d'origine (mai 2026) qui a
+> généré le projet. Il est conservé tel quel comme trace de l'intention
+> initiale et **n'est plus une description du produit actuel** : le périmètre
+> multi-devices (Flipper Zero, iPhone, Switch) n'a pas été implémenté, et
+> herd s'est recentré sur le lancement et la supervision d'un `llama-server`
+> local. Pour l'état réel, voir `README.md`, `CLAUDE.md`, `herd-spec-kit/`
+> et `PROMPT_NEXT_STEPS.md`.
 
 ## 🎯 Vision
 
@@ -51,7 +59,7 @@ Contexte temporel : **mai 2026** — utiliser les dernières versions stables.
 
 ## 📚 Méthodologie & ressources
 
-1. **Spécifications** : structurer le projet selon [spec-kit](https://github.com/github/spec-kit) → générer `./ops-tui-spec-kit`
+1. **Spécifications** : structurer le projet selon [spec-kit](https://github.com/github/spec-kit) → générer `./herd-spec-kit`
 2. **Skills Karpathy** : intégrer les patterns de [andrej-karpathy-skills](https://github.com/forrestchang/andrej-karpathy-skills)
 
 ## 📖 Documentation
@@ -76,7 +84,7 @@ Le `README.md` doit impérativement contenir :
 
 ## 🚀 Phase de build
 
-Générer une application Rust TUI basée sur le spec-kit présent dans `./ops-tui-spec-kit`.
+Générer une application Rust TUI basée sur le spec-kit présent dans `./herd-spec-kit`.
 
 **Contraintes techniques :**
 - `ratatui` + `tokio` obligatoires

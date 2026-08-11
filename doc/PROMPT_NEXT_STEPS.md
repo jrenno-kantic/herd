@@ -1,0 +1,396 @@
+# Suite du travail sur herd (lanceur llama-server)
+
+Document de reprise. À lire avant toute extension du lanceur.
+
+---
+
+## Objectif du projet
+
+herd est un **lanceur de LLM locaux en terminal**. Il transforme un
+`models.ini` llama-server en quelque chose qui se parcourt et s'actionne, au
+lieu d'un fichier qu'on lit avant de taper une longue ligne de commande.
+
+Filiation : `llama-launch.js` résout la précédence ini et **imprime** un argv.
+herd résout la même précédence, affiche l'argv en direct, puis lance et
+supervise réellement le processus.
+
+Le runner générique d'origine (`help`, `test`, `scan`, `sh`) subsiste en
+dessous, mais ce n'est plus le sujet.
+
+## Les quatre écrans
+
+| | Écran | Rôle |
+|---|---|---|
+| `1` | Models | Table des presets du `models.ini` actif + aperçu argv en direct |
+| `2` | Server | État du cycle de vie, endpoint, uptime, sortie récente |
+| `3` | Test | Appel de chat sur le modèle chargé : réponse, latence, débit |
+| `4` | Stats | Compteurs de session + budget mémoire |
+| `5` | Settings | Clés `[server]` / `[*]` / par modèle, éditables pour la session |
+| `6` | Logs | Historique complet |
+
+## Cycle de vie
+
+```
+OFF ──launch──> STARTING ──/health 200──> SERVING ──stop──> STOPPING ──> OFF
+                    │                        │
+                    └─── échec au spawn ─────┴── crash ──> ERROR ──> OFF
+```
+
+`STARTING → SERVING` est confirmé par un **polling de `GET /health`**, et non
+plus par une heuristique sur les logs : llama.cpp reformule ses lignes de démarrage entre
+versions, et un état affiché auquel on ne peut pas se fier est pire que pas
+d'état du tout. `ERROR` existe pour qu'un OOM ou un GGUF manquant soit
+distinguable d'un arrêt propre.
+
+`stop_announced` n'émet **rien** quand rien ne tournait : afficher une
+transition qui n'a pas eu lieu est un vrai bug d'IHM (test dédié).
+
+## 🔴 Règle de verrouillage à ne jamais enfreindre
+
+`Supervisor` garde l'enfant dans un `Arc<Mutex<Option<Child>>>`. **Aucun await
+ne doit être fait en tenant ce verrou.**
+
+Bug corrigé le 2026-08-10 : le watcher de sortie faisait `child.wait().await`
+*sous* le guard, donc le verrou restait pris pendant toute la vie du processus.
+Tout le reste qui en a besoin — le poller `/health`, `is_running`, `stop` — se
+bloquait indéfiniment. Symptômes observés : l'IHM restait sur STARTING alors que
+le serveur répondait déjà `200 {"status":"ok"}` sur `/health`, `:stop` ne
+répondait plus, et la fermeture propre (`executor.shutdown()`) se bloquait aussi,
+ce qui **laissait un llama-server orphelin sur le port 1234 en gardant la VRAM**.
+
+Les deux règles qui en découlent :
+
+- le watcher de sortie **poll `try_wait()`** par intervalles courts, il n'attend
+  jamais `wait()` sous le verrou ;
+- `stop()` **sort** l'enfant du slot d'abord, puis l'attend hors verrou.
+
+Tests de non-régression : `a_live_child_never_holds_the_lock` (prouve que
+`is_running` et `stop` répondent pendant qu'un enfant tourne) et
+`a_healthy_process_transitions_to_serving` (STARTING → SERVING de bout en bout
+contre un faux serveur HTTP, sans GPU).
+
+## Génération de lancement
+
+Chaque lancement porte un numéro de génération (`process.rs::Supervised`).
+`stop()` comme un hot-swap vident puis re-remplissent le slot partagé : « y
+a-t-il un enfant ? » ne suffit donc pas à dire à une tâche d'un lancement
+précédent si l'enfant qu'elle voit est encore le sien. Sans ce garde-fou, un
+watcher retiré adopte le processus suivant et le rapporte sous le nom du modèle
+précédent. Garde : `is_current()`. Test :
+`a_hot_swap_retires_the_previous_launch_watchers`.
+
+## Marqueur de l'écran Models
+
+Bug corrigé le 2026-08-10 : après un `stop`, le point restait devant le modèle
+arrêté et le nom restait affiché. Deux causes conjuguées :
+
+- `apply_status` ne vidait `server.model` que `if !was_live`, c'est-à-dire
+  jamais dans le cas qui compte (SERVING → STOPPING → OFF) ;
+- le marqueur se basait sur une simple égalité de nom, sans regarder l'état.
+
+Désormais `apply_status` vide le modèle sur `Off` (et le **garde** sur `Error`,
+pour pouvoir afficher « ERROR gemma4-12b »), et `lifecycle_glyph` dérive le
+marqueur de l'état : `●` SERVING, `◐` STARTING/STOPPING, `✖` ERROR, rien sinon.
+Tests : `a_stopped_model_loses_its_marker`, `each_live_state_has_its_own_marker`,
+`stopping_then_launching_another_model_switches_cleanly`.
+
+## Retours quand rien ne se passe
+
+Deux pièges d'ergonomie corrigés en même temps :
+
+- `App::run` ignorait silencieusement une commande quand une autre était en
+  vol : on appuyait sur `s` puis `Entrée`, et la seconde touche disparaissait
+  sans explication. Elle journalise maintenant `busy, ignored :<commande>`.
+- `port_in_use_settled` re-teste le port trois fois à 250 ms d'intervalle avant
+  de conclure : un serveur tué une seconde plus tôt peut encore accepter une
+  connexion pendant que le noyau démonte la socket, ce qui déclenchait une
+  modale « port occupé » contre un processus déjà mort.
+
+## Formes de réponse de `/v1/models`
+
+llama-server a livré deux formes : celle d'OpenAI (`{"data":[{"id":...}]}`) et
+une forme façon Ollama (`{"models":[{"name":...,"model":...}]}`, ce que renvoie
+le build 10330). `parse_model_list` accepte les deux. Avec seulement la première,
+`:status` annonçait « no models currently loaded » face à un serveur qui servait
+manifestement un modèle.
+
+## Overrides de settings : session uniquement
+
+Les éditions de l'écran Settings s'appliquent au prochain lancement et sont
+**perdues à la fermeture**. `models.ini` n'est **jamais** réécrit : ces fichiers
+sont maintenus à la main et fortement commentés, et aucun round-tripper ini ne
+préserve fiablement l'emplacement des commentaires.
+
+Un override est exactement un override CLI, donc il s'insère dans la chaîne de
+précédence existante sans nouvelle règle dans le moteur :
+
+```
+[server] → [*] → [model] → overrides de session → args CLI explicites
+```
+
+Seuls le **palier** et le **dernier preset lancé** sont persistés, dans
+`~/.config/herd/session.json`. Ne pas y ajouter les overrides : cela
+contredirait la décision ci-dessus.
+
+## Le dossier `data/`
+
+Le dépôt embarque désormais un instantané des paliers de presets :
+
+```
+data/
+├── 16gb/models.ini      12 presets (4B à 14B)
+├── 32gb/models.ini       8 presets (12B à 35B)
+├── scripts/llama-launch.js
+├── scripts/test_call.sh
+└── start-router.sh
+```
+
+Copie conforme de `~/models/`, aux deux fichiers près qui n'ont pas été repris :
+`16gb/LLM hosting.md` et `huggingface`.
+
+C'est de la **donnée de référence et de test, pas une source de configuration à
+l'exécution** : la résolution lit toujours `~/models/`. Les tests parsent ces
+fichiers directement via `CARGO_MANIFEST_DIR` :
+
+- `shipped_16gb_tier_parses_with_every_preset` / `shipped_32gb_...` — la liste
+  exacte des presets ;
+- `every_shipped_preset_builds_an_argv` — chaque preset produit une ligne de
+  commande lançable (source de modèle + alias) ;
+- `shipped_tiers_share_a_port` — les deux paliers partagent bien le port, ce qui
+  justifie la modale de conflit.
+
+Si `data/` est resynchronisé depuis `~/models/`, ces tests sont ce qui signale un
+preset dont la forme a changé. Les mettre à jour, pas les supprimer.
+
+## Résolution de `models.ini`
+
+1. `--config <path>` (aussi `-c`, `--config=`)
+2. `$HERD_LLAMA_CONFIG`
+3. le palier retenu de la session précédente, s'il existe encore
+4. le palier de RAM détecté sous `~/models/<N>gb/`
+5. l'ancien fichier plat `~/models/models.ini`
+
+Les étapes 1 et 2 sont prises au pied de la lettre. L'étape 4 lit la RAM
+installée (`sysctl hw.memsize` / `/proc/meminfo`, sans crate système) et retient
+le palier le plus riche qui tient ; sinon le plus petit.
+
+**Piège à ne pas rouvrir :** le chemin actif vit à deux endroits, `App` et
+`Executor`. Changer de palier avec `t` renvoie `Action::ConfigPathChanged`, que
+`main.rs` transmet à `Executor::set_config_path`. Si cette boucle est cassée,
+les lancements résolvent les presets contre l'ancien palier et échouent en
+« unknown model ». Test de non-régression :
+`switching_tier_reports_the_new_config_path`.
+
+## L'écran Test
+
+Portage de `data/scripts/test_call.sh` : même `SYSTEM_PROMPT`, même message par
+défaut (`Bonjour`), même requête non-streamée. Garder ces constantes alignées
+sur le script — elles existent pour que les deux soient comparables.
+
+La latence est mesurée localement, donc toujours affichée. `usage` et le bloc
+non standard `timings` de llama.cpp sont lus de façon opportuniste : si le
+serveur ne les fournit pas, la ligne se dégrade au lieu de disparaître.
+
+La sonde voyage en `Action::RunChat { model, prompt }` et non en
+`RunCommand(String)` : le prompt est du texte libre, il ne doit pas repasser par
+un découpage de ligne de commande. Elle est volontairement **hors** du drapeau
+`running` — une génération lente ne doit pas empêcher d'arrêter le serveur — d'où
+son propre `chat_pending` et son propre `ChatGuard`, qui garantit exactement un
+`ChatResult` même en cas de panique ou d'abandon.
+
+Cible : le modèle chargé, sinon le preset sélectionné, pour rester utilisable
+face à un serveur lancé hors d'herd.
+
+## Dimensionnement mémoire (`services/llama/memory.rs`)
+
+`estimate_gib` déduit le nombre de paramètres et la quantisation du **nom du
+dépôt** — la seule information de taille que porte un `models.ini` — puis ajoute
+une allocation forfaitaire pour l'exécution. C'est une heuristique, assumée comme
+telle :
+
+- le plus **grand** jeton `<n>B` gagne : un MoE `35B-A3B` compte pour 35B (tous
+  les experts sont résidents), pas 3B ;
+- les tags de quantisation ne doivent jamais passer pour un nombre de paramètres
+  (`Q4_K_M` ne contient pas de `B`) — test dédié ;
+- un nom illisible renvoie `None` → `Fit::Unknown` : **ne jamais signaler ce
+  qu'on ne sait pas mesurer**, un avertissement rouge erroné est pire que pas
+  d'avertissement. Idem si la RAM n'est pas lisible.
+
+`Budget` = RAM installée moins `reserved_ratio` (25 % par défaut, l'ordre de
+grandeur de ce que macOS garde hors du GPU). Session uniquement, comme les autres
+overrides. `+`/`-` sur l'écran Stats avancent par point de pourcentage entier —
+la valeur est arrondie, sinon un `+= 0.05` répété dérive et n'atteint jamais
+exactement les bornes.
+
+Descendre sous le défaut active `is_risky()` : bandeau rouge permanent et
+avertissement journalisé une fois. **herd ne modifie aucun réglage système** :
+l'écran affiche `sudo sysctl iogpu.wired_limit_mb=…` à exécuter soi-même, il ne
+le lance pas.
+
+## Statistiques de session
+
+`SessionStats` est remis à zéro à chaque `Starting` : les compteurs décrivent la
+session de service courante. `average_rate` divise le total de jetons produits
+par le temps total écoulé, plutôt que de moyenner les débits par requête — un
+test fige cette distinction.
+
+`started_at` est un `chrono::DateTime<Local>` conservé à côté de l'`Instant`
+monotone : un `Instant` sait dire « il y a 12 min » mais jamais « démarré à
+14:32 », ce que la page de stats demande. C'est la seule raison de la dépendance
+`chrono`.
+
+## Sélecteur de `models.ini` (`c`)
+
+`c` ouvre une modale listant tous les `models.ini` de la machine, chacun avec son
+nombre de presets et combien dépassent le budget courant. Les comptes sont
+calculés en lisant les fichiers directement : l'intérêt du sélecteur est de juger
+un fichier qui n'est **pas** celui chargé.
+
+Choisir un autre fichier renvoie `Action::ConfigPathChanged` — même boucle que le
+changement de palier, avec le même piège à ne pas rouvrir (voir plus haut).
+
+## Conflits de port
+
+Les paliers partagent `port = 1234`. Avant de lancer, l'`Executor` teste le port
+et émet `UiEvent::PortInUse`, ce qui bascule l'App en `ConfirmLaunch`. La
+confirmation re-dispatche en `launch!` (variante forcée, émise par la modale,
+jamais tapée).
+
+herd **ne tue jamais un processus qu'il n'a pas lancé** : il n'a aucun moyen
+de savoir ce que c'est. Quand le port est tenu par son propre enfant supervisé,
+`spawn` fait un hot-swap sans poser de question.
+
+## État de validation
+
+Validé sur la machine réelle (macOS / Apple Silicon) le 2026-08-10 :
+
+```
+cargo build                  # aucun warning
+cargo test                   # 163/163 tests OK (+4 `live` ignorés)
+cargo clippy --all-targets   # aucun warning
+cargo fmt --check            # propre
+```
+
+Rendu vérifié contre le vrai `~/models/32gb/models.ini` : les 8 presets
+s'affichent avec repo, ctx et mode spéculatif, et l'aperçu argv est correct.
+Endpoints vérifiés contre un vrai llama-server (build 10330) : `/health`
+renvoie bien `200 {"status":"ok"}` et `/v1/models` la forme « models ».
+
+## Fiabilité du process llama-server (2026-08-11)
+
+Sept correctifs, motivés par un MacBook Air M5 16 Go où le modèle frôle la
+RAM disponible. Le détail des invariants est dans `CLAUDE.md` ; en résumé :
+
+1. **La surveillance `/health` ne s'arrête plus au premier 200.** Un serveur
+   qui se tait sans mourir était invisible pour le guetteur de sortie :
+   l'IHM affichait SERVING indéfiniment. Après SERVING, sonde toutes les 5 s
+   et signale `Phase::Unresponsive` après trois échecs consécutifs. Jamais
+   escaladé en `Error` — le process est vivant et peut revenir.
+2. **STARTING est détaillé.** `Phase::Binding` (rien n'écoute encore) vs
+   `Phase::Loading` (503, poids en cours de chargement), avec deux budgets :
+   90 s pour ouvrir le port, 600 s pour charger. Le temps écoulé est affiché
+   dans la barre d'état — c'est ce qui distingue « ça charge » de « c'est
+   planté ».
+3. **`stop()` est borné.** SIGTERM (llama-server libère alors la mémoire GPU
+   proprement) → 5 s → SIGKILL → 5 s → abandon. L'ancien `wait()` non borné
+   était sur le chemin critique du hot-swap, de `:stop` et de la sortie de
+   l'application : un kill lent gelait l'IHM.
+4. **`:stop` contourne le verrou `running`.** C'est la commande dont on a
+   besoin quand le reste est bloqué ; elle était refusée précisément dans ce
+   cas.
+5. **Les morts par signal sont diagnostiquées.** SIGKILL devient « killed by
+   the system — most likely out of memory », complété par l'estimation et le
+   budget quand le preset était déjà signalé trop gros.
+6. **Un preset `Fit::TooLarge` demande confirmation avant lancement.** Le
+   marqueur existait déjà mais ne bloquait rien.
+7. **La boucle d'événements vide la file avant de dessiner**, et un seul
+   client `reqwest` est partagé. Le chargement d'un modèle produit des
+   centaines de lignes ; un rendu complet par ligne faisait ramer l'IHM au
+   pire moment.
+
+## Navigation (2026-08-11)
+
+1. **Les touches page suivent la hauteur du terminal.** `App::page()` =
+   hauteur − `chrome(écran)` − 1 ligne de recouvrement, au lieu d'un `PAGE`
+   fixe à 10. La hauteur arrive par `UiEvent::Resize` ; `App::update` reste
+   pure, elle est informée, elle n'interroge rien.
+2. **Le sélecteur de config répond aux mêmes touches que les autres listes**
+   (page, début, fin). Il réimplémentait `j`/`k` à la main et n'avait donc
+   pas le reste.
+3. **←/→ changent d'écran**, en doublon de Tab / Maj+Tab. Ces touches ne
+   faisaient rien ; ↑/↓ ne peuvent pas jouer ce rôle, elles appartiennent
+   aux listes.
+4. **Indicateur de position `3/8`** sur Models et Settings, et **barre de
+   défilement** sur la bordure droite de l'écran Logs (rien n'est dessiné
+   quand tout le tampon tient à l'écran).
+5. **Entrée bascule les booléens** sur Settings (`true/false`, `on/off`,
+   `yes/no`), au lieu d'ouvrir l'éditeur. `1`/`0` sont exclus : impossibles
+   à distinguer d'un réglage numérique. La casse et la famille d'écriture
+   sont conservées (`ON` → `OFF`, jamais `false`). Case à cocher
+   `[x]`/`[ ]` devant les valeurs concernées.
+6. **Chronométrage sur l'écran Test** : heure d'envoi, latence, et le
+   découpage serveur de llama.cpp (`prompt eval` / `generation` /
+   `overhead`). Compteur qui défile pendant l'attente.
+
+## Disponibilité locale des modèles (2026-08-11)
+
+1. **`llama-server --cache-list` fait autorité**, pas une inspection du
+   disque : llama.cpp refuse à juste titre de lister un dépôt dont les
+   blobs contiennent un `.downloadInProgress` inachevé (cas réel de
+   `gemma-4-31B` sur cette machine), ce qu'aucun `find` n'aurait vu.
+   `Availability::Unknown` tant que la réponse n'est pas arrivée : annoncer
+   à tort « à télécharger » est la seule erreur coûteuse ici.
+2. **Colonne LOCAL** sur l'écran Models. Sur le palier 16gb, 8 presets sur
+   12 ne sont pas présents localement.
+3. **Entrée sur un preset absent demande confirmation**, puis télécharge
+   *et* lance. **`d`** télécharge sans lancer.
+4. **Téléchargement délégué au CLI `hf`** : il possède le format du cache
+   (blobs, liens de snapshot, refs), c'est la partie qu'il ne faut pas
+   rater. Fichiers nommés explicitement, jamais de glob.
+5. **La progression est mesurée, pas analysée.** Dans un tube, `hf` 1.27
+   n'affiche qu'un compteur de *fichiers* (`Fetching 3 files: 33%`) : un
+   fichier de 6,7 Go resterait à 0 % du début à la fin. On somme donc les
+   blobs terminés et les `*.incomplete` du cache, face au total donné par
+   l'API tree.
+6. **Deux pièges révélés par les vraies données**, tous deux couverts par
+   des tests : `unsloth/gemma-4-*-GGUF` contient un *répertoire* nommé
+   `MTP` (sélectionné à tort comme artefact de 0 octet), et expose deux
+   `mmproj` (BF16 et F16) dont un seul est nécessaire.
+
+## Limites connues à améliorer
+
+1. **Pas de redémarrage automatique en cas de crash.** `ServerState::Error` est
+   affiché, rien n'est retenté. Un serveur devenu muet
+   (`Phase::Unresponsive`) est signalé mais jamais relancé non plus : la
+   décision reste à l'utilisateur.
+2. **Tests d'intégration partiels.** `api.rs` a désormais des tests `live`
+   marqués `#[ignore]` (health / list_models / port_in_use) à lancer avec
+   `cargo test -- --ignored --test-threads=1` quand un serveur tourne sur
+   :1234, et `process.rs` valide STARTING → SERVING contre un faux serveur
+   HTTP. Manque encore un test bout en bout contre un vrai `llama-server`
+   (spawn + chargement de modèle + kill).
+3. **Mode routeur non exposé dans l'IHM.** Il reste accessible uniquement par
+   `:router [--max N] [--idle S]`. Il mériterait une action d'écran (touche
+   dédiée sur Models, ou un écran à part) puisque c'est l'un des deux modes de
+   fonctionnement.
+4. **L'estimation mémoire reste une heuristique.** Elle ignore la taille réelle
+   du GGUF (téléchargé) et le cache KV effectif, qui dépend de `ctx-size` et du
+   nombre de couches. Piste : lire la taille du fichier en cache quand il est
+   présent, et modéliser le KV à partir de `ctx-size`.
+5. **Doublons entre paliers non signalés dans l'IHM.** `gemma4-12b`,
+   `qwen3-vl-8b-instruct` et `qwen-3-14b-instruct` existent dans 16gb et 32gb ;
+   rien ne l'indique à l'écran (un test le vérifie côté données seulement).
+6. **Logs sans recherche.** L'écran Logs défile désormais (`App::log_scroll`,
+   500 lignes conservées) mais n'offre ni recherche ni filtre.
+7. **`:status` ne montre pas le modèle réellement chargé en mémoire par le
+   routeur** au-delà de ce que renvoie `/v1/models`.
+
+## Méthode
+
+Avant de conclure quoi que ce soit :
+
+```
+cargo build && cargo test && cargo clippy --all-targets && cargo fmt
+```
+
+La convention du projet est de partir au vert et de laisser au vert.
