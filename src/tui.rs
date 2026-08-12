@@ -1,8 +1,8 @@
 use crate::{
     app::{App, Mode, Screen},
     components::{
-        command_bar, confirm, help, hub, logs, models, picker, router, server, settings, sidebar,
-        stats, status, test,
+        command_bar, command_help, confirm, help, hub, logs, models, picker, router, server,
+        settings, sidebar, stats, status, test,
     },
     layout,
     theme::Theme,
@@ -74,6 +74,9 @@ pub fn render(frame: &mut Frame, app: &App) {
     }
     if app.mode == Mode::Help {
         help::render(frame, app, frame.area());
+    }
+    if app.mode == Mode::Commands {
+        command_help::render(frame, app, frame.area());
     }
 }
 
@@ -238,6 +241,13 @@ spec-type = draft-mtp
                     frame_text(&app, width, 32)
                 );
             }
+
+            app.mode = Mode::Commands;
+            println!(
+                "\n=== :help at {width} ===\n{}",
+                frame_text(&app, width, 32)
+            );
+            app.mode = Mode::Browse;
         }
     }
 
@@ -668,6 +678,48 @@ spec-type = draft-mtp
         );
     }
 
+    /// `:help` draws over whatever screen you were on, with the commands
+    /// grouped and their arguments shown — `ping` without a model is a
+    /// usage error, not a command.
+    #[test]
+    fn the_command_listing_is_drawn_over_the_screen() {
+        let mut app = sample_app();
+        app.mode = Mode::Commands;
+
+        let text = frame_text(&app, 120, 40);
+        assert!(text.contains("Commands"), "{text}");
+        assert!(text.contains("llama-server"), "no group headings: {text}");
+        assert!(text.contains(":launch <model>"), "{text}");
+        assert!(text.contains(":cache"), "the newest command is missing");
+        assert!(
+            !text.contains("launch!"),
+            "the forced launch must not be advertised"
+        );
+    }
+
+    /// A blank prompt with a border reading "Command" says that commands
+    /// exist and nothing about which, so the bar carries the pointer.
+    #[test]
+    fn the_command_bar_says_where_the_listing_is() {
+        let mut app = sample_app();
+        assert!(frame_text(&app, 120, 40).contains(":help lists"));
+
+        // ...and while a line is being typed, what that line would run.
+        app.update(crate::event::UiEvent::Key(crossterm::event::KeyEvent::new(
+            crossterm::event::KeyCode::Char(':'),
+            crossterm::event::KeyModifiers::NONE,
+        )));
+        for c in "status".chars() {
+            app.update(crate::event::UiEvent::Key(crossterm::event::KeyEvent::new(
+                crossterm::event::KeyCode::Char(c),
+                crossterm::event::KeyModifiers::NONE,
+            )));
+        }
+
+        let text = frame_text(&app, 120, 40);
+        assert!(text.contains("is the server reachable"), "{text}");
+    }
+
     #[test]
     fn the_help_overlay_is_drawn_over_the_screen() {
         let mut app = sample_app();
@@ -692,7 +744,12 @@ spec-type = draft-mtp
         }
 
         app.llama.confirm = Some(crate::app::Confirm::PortInUse(1234));
-        for mode in [Mode::Help, Mode::Picker, Mode::ConfirmLaunch] {
+        for mode in [
+            Mode::Help,
+            Mode::Commands,
+            Mode::Picker,
+            Mode::ConfirmLaunch,
+        ] {
             app.mode = mode;
             let _ = frame_text(&app, 20, 6);
         }

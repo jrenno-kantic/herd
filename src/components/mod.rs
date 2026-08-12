@@ -1,4 +1,5 @@
 pub mod command_bar;
+pub mod command_help;
 pub mod confirm;
 pub mod help;
 pub mod hub;

@@ -299,4 +299,35 @@
       call per row — worth doing only if the estimate proves wrong on a
       preset someone actually cares about.
 
-- [ ] Add a help command in the command component to display information about all available commands
+- [x] Add a help command in the command component to display information
+      about all available commands → `:help` opens a **Commands** overlay,
+      grouped (llama-server / models.ini / other) and showing each command
+      with its arguments — `ping` without a model is a usage error, not a
+      command. The counterpart to `?`, which does the same for keys, and
+      each points at the other.
+    - **An overlay, not a log line.** `:help` was already dispatched like
+      any other command and printed its list into the log — which is on
+      another screen, is where a loading server writes hundreds of lines,
+      and scrolls. Being answered somewhere else, later, is not an answer.
+    - Answered locally in `App::submit_command` and **before the busy
+      gate**, like `stop`: "what can I type" is a question people ask
+      *because* something is stuck.
+    - The list that existed (`scripts.rs::COMMANDS`) had drifted from the
+      dispatchers, which is what made this worth doing properly rather
+      than reformatting: it never learned `reload`, never learned `cache`,
+      and told the reader the Test screen was "key 3" — untrue since the
+      Router screen was inserted. `commands.rs` is now the only place a
+      command is written down.
+    - It is **checked against the dispatchers**, the same bargain
+      `keys.rs` makes: each entry carries a handler and a probe, and two
+      tests split the table between them, failing if a documented command
+      ever comes back "Unknown command".
+    - The bar carries the pointer on its border, and while a line is being
+      typed it names what that line would run — `:lauch` reads as
+      `unknown` before Enter rather than after it.
+    - `launch!` is in the table but not listed: the port-in-use prompt
+      emits it, and advertising it would invite skipping a check that
+      exists for a reason.
+    - The overlay sizes itself to its content and elides visibly when the
+      terminal is narrower, since a clipped summary reads as one that
+      simply ended there.

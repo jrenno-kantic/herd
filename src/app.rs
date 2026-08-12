@@ -97,6 +97,11 @@ pub enum Mode {
     /// The `?` overlay. A mode rather than a screen so it can be summoned
     /// from anywhere and dismissed back to where the user was.
     Help,
+    /// The `:help` overlay — the same idea for the command bar's
+    /// vocabulary. Separate from `Help` because the two answer different
+    /// questions ("what does this key do" against "what can I type"), and
+    /// one list of both would bury each in the other.
+    Commands,
 }
 
 #[derive(Debug, Clone)]
@@ -1404,7 +1409,8 @@ impl App {
 
     fn handle_key(&mut self, key: KeyEvent) -> Action {
         match self.mode {
-            Mode::Help => self.handle_help_key(key),
+            // Both overlays are reference cards, and both close on any key.
+            Mode::Help | Mode::Commands => self.handle_help_key(key),
             Mode::Command => self.handle_command_key(key),
             Mode::Filter => self.handle_filter_key(key),
             Mode::EditSetting => self.handle_edit_key(key),
@@ -2296,6 +2302,17 @@ impl App {
             self.command_input.clear();
             self.mode = Mode::Browse;
             return self.dispatch_stop();
+        }
+
+        // `help` is answered here rather than dispatched, for the same
+        // reason as `models` below: it is local text, and there is nothing
+        // to run. It also has to work while something is in flight —
+        // "what can I type" is a question people ask *because* they are
+        // stuck — so it is checked before the busy gate, like `stop`.
+        if command == "help" {
+            self.command_input.clear();
+            self.mode = Mode::Commands;
+            return Action::None;
         }
 
         if self.running {
@@ -3715,6 +3732,74 @@ alias = qwen3-coder
         match app.update(ch('s')) {
             Action::RunCommand(command) => assert_eq!(command, "stop"),
             other => panic!("stop was swallowed by the busy gate: {other:?}"),
+        }
+    }
+
+    /// Types a whole command line into the bar and submits it.
+    fn submit(app: &mut App, line: &str) -> Action {
+        app.update(ch(':'));
+        for c in line.chars() {
+            app.update(ch(c));
+        }
+        app.update(key(KeyCode::Enter))
+    }
+
+    /// `:help` answers on the spot, as an overlay over whatever is on
+    /// screen. It used to be dispatched like any other command and printed
+    /// into the log — which is on another screen, is where a loading
+    /// server also writes hundreds of lines, and scrolls.
+    #[test]
+    fn help_opens_the_command_listing_rather_than_running_anything() {
+        let mut app = app_with_sample();
+
+        assert!(matches!(submit(&mut app, "help"), Action::None));
+        assert_eq!(app.mode, Mode::Commands);
+        assert!(!app.running, "the listing is local, nothing was queued");
+        assert!(app.command_input.is_empty());
+
+        // A reference card closes on any key, like the `?` overlay.
+        app.update(ch('x'));
+        assert_eq!(app.mode, Mode::Browse);
+    }
+
+    /// "What can I type" is a question people ask *because* something is
+    /// stuck, so the busy gate must not be what answers it.
+    #[test]
+    fn help_is_answered_while_a_command_is_in_flight() {
+        let mut app = app_with_sample();
+        app.running = true;
+
+        assert!(matches!(submit(&mut app, "help"), Action::None));
+        assert_eq!(app.mode, Mode::Commands);
+    }
+
+    /// The other half of `every_documented_command_reaches_a_handler`
+    /// (in `executor.rs`): the commands answered here, in `App`, must be
+    /// answered here — reaching the Executor would mean falling through to
+    /// the generic script path and coming back "Unknown command".
+    #[test]
+    fn every_locally_handled_command_is_answered_by_the_app() {
+        use crate::commands::{Handler, ALL};
+
+        for command in ALL.iter().filter(|c| c.handler == Handler::App) {
+            let mut app = app_with_sample();
+            let logs = app.logs.len();
+
+            match submit(&mut app, command.probe) {
+                Action::None => {}
+                other => panic!("`:{}` was dispatched instead: {other:?}", command.usage),
+            }
+
+            assert!(
+                app.mode == Mode::Commands || app.logs.len() > logs,
+                "`:{}` did nothing visible at all",
+                command.usage
+            );
+            assert!(
+                !app.running,
+                "`:{}` claimed the busy flag for local work",
+                command.usage
+            );
         }
     }
 

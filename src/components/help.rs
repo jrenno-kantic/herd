@@ -38,7 +38,13 @@ fn lines(app: &App) -> Vec<Line<'static>> {
     lines.extend(keys::GLOBAL.iter().map(row));
 
     lines.push(Line::from(""));
-    lines.push(Line::styled("  esc close", Theme::logs()));
+    // This overlay covers keys; the command bar has its own vocabulary and
+    // its own listing, and someone who came here looking for `:launch`
+    // should be told where it is rather than concluding it does not exist.
+    lines.push(Line::styled(
+        "  esc close · :help lists the commands",
+        Theme::logs(),
+    ));
     lines
 }
 

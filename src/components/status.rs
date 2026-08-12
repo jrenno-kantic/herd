@@ -69,6 +69,7 @@ fn hint(app: &App) -> String {
         Mode::ConfirmLaunch => "y launch anyway · any other key cancel".to_string(),
         Mode::ConfirmQuit => "y quit anyway · any other key stay".to_string(),
         Mode::Help => "any key closes the help".to_string(),
+        Mode::Commands => "any key closes the command list".to_string(),
         // The globals only; the screen's own keys are in its footer, and
         // both come from the same table.
         Mode::Browse => keys::global_hint(),

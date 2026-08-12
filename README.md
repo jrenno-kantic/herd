@@ -21,11 +21,11 @@ It is a Rust port and expansion of the `llama-launch.js` idea: that script resol
 ┌HERD 0.5.0────────────┐┌ Models · 32gb · ~/models/32gb/models.ini ────────────────────── 1/8 ┐
 │ ▸ 1 Models           ││   NAME            REPO              RAM     OPT CAPS SPEC   LOCAL   │
 │   2 Hub              ││▸★●gemma4-12b      unsloth/gemma-4…  7.3G  qat ud    S  mtp         █│
-│   3 Server           ││  ★gemma4-31b      unsloth/gemma-4…~18.3G  qat ud    S  mtp not local║
-│   4 Router           ││   qwen3-coder     unsloth/Qwen3-C… 17.5G  ud moe    C    -         ║│
+│   3 Server           ││  ★gemma4-31b      unsloth/gemma-4…~18.3G  qat ud    S  mtp not local│
+│   4 Router           ││   qwen3-coder     unsloth/Qwen3-C… 17.5G  ud moe    C    -          │
 │   5 Test             ││                                                                     │
 │   6 Stats            ││  RAM 36 GiB · quantisation-aware training · speculative (mtp)       │
-│   7 Settings         ││  j/↓ move · enter launch · s stop · d download · / filter · …      │
+│   7 Settings         ││  j/↓ move · enter launch · s stop · d download · / filter · …       │
 │   8 Logs             │└─────────────────────────────────────────────────────────────────────┘
 │ tier  32gb           │┌ argv preview ─────────────────────────────────────────────── y copy ┐
 │ RAM   36 GiB         ││llama-server \                                                       │
@@ -86,7 +86,7 @@ Global:
 | `1`–`8` | jump to a screen |
 | `c` | choose which `models.ini` to use |
 | `Tab` / `Shift-Tab`, or `→` / `←` | cycle screens |
-| `:` | command bar (power-user escape hatch) |
+| `:` | command bar (power-user escape hatch) — `:help` lists what it accepts |
 | `?` | key reference |
 | `q` | quit — asks first if a download, probe or command is in flight |
 | `Q` | quit at once, abandoning it |
@@ -509,21 +509,21 @@ until now they were flags on a `:router` command line, where nobody could see
 them.
 
 ```
-┌ Router · 32gb ──────────────────────────────────────────────────── 1/2 ┐
-│  state     not running                                                 │
-│  presets   ~/models/32gb/models.ini                                    │
-│  endpoint  -                                                           │
-│                                                                        │
-│▸ models-max                2   models kept resident before one is unloaded
-│  sleep-idle-seconds     300s   idle time before a model is unloaded    │
-│                                                                        │
-│  j/↓ move · +/- adjust · enter start · s stop · r reset                │
-└────────────────────────────────────────────────────────────────────────┘
-┌ argv preview ─────────────────────────────────────────────── y copy ┐
-│llama-server \                                                       │
-│  --host 0.0.0.0 --port 1234 --jinja --models-preset ~/models/32gb/… │
-│  --models-max 2 --sleep-idle-seconds 300                            │
-└─────────────────────────────────────────────────────────────────────┘
+┌ Router · 32gb ──────────────────────────────────────────────────────── 1/2 ┐
+│  state     not running                                                     │
+│  presets   ~/models/32gb/models.ini                                        │
+│  endpoint  -                                                               │
+│                                                                            │
+│▸ models-max                2   models kept resident before one is unloaded │  
+│  sleep-idle-seconds     300s   idle time before a model is unloaded        │
+│                                                                            │
+│  j/↓ move · +/- adjust · enter start · s stop · r reset                    │
+└────────────────────────────────────────────────────────────────────────────┘
+┌ argv preview ────────────────────────────────────────────────────── y copy ┐
+│llama-server \                                                              │
+│  --host 0.0.0.0 --port 1234 --jinja --models-preset ~/models/32gb/…        │
+│  --models-max 2 --sleep-idle-seconds 300                                   │
+└────────────────────────────────────────────────────────────────────────────┘
 ```
 
 `Enter` starts it with exactly what is on screen; the argv preview below is the
@@ -546,7 +546,44 @@ The `:` bar remains available for anything faster to type than to navigate:
 - `router [--max N] [--idle S]` -> start llama-server's native router, which loads and unloads models on demand (defaults: `--max 2 --idle 300`)
 - `stop`, `status`, `ping <model>`
 - `cache` -> ask llama.cpp again what it has, after a download or a deletion made outside HERD (also `r` on the Hub screen)
-- `help`, `test`, `scan`, `sh <command>`
+- `help` -> the list below, as an overlay
+- `test`, `scan`, `sh <command>`
+
+**`:help` lists them all**, grouped, with their arguments — the counterpart to
+`?` for keys:
+
+```
+┌ Commands ─────────────────────────────────────────────────────────────────┐
+│  llama-server                                                             │
+│  :launch <model> [-- args]    launch a preset, hot-swapping whatever is …│
+│  :router [--max N] [--idle S] start llama-server's own multi-model router  │
+│  :stop                        stop the supervised process, even while …    │
+│  :status                      is the server reachable, and what has it …   │
+│  :ping <model>                send one chat completion and print the reply │
+│                                                                           │
+│  models.ini                                                               │
+│  :cache                       ask llama.cpp again what it has locally      │
+│  …                                                                        │
+│                                                                           │
+│  esc close · ? lists the keys instead                                     │
+└───────────────────────────────────────────────────────────────────────────┘
+```
+
+An overlay rather than a line printed into the log, which is what `:help` used
+to do — the log is on another screen, is where a loading server also writes
+hundreds of lines, and scrolls. It is answered locally and works while something
+else is in flight, since "what can I type" is a question you ask *because* you
+are stuck.
+
+The bar itself carries the pointer on its border, and while you are typing it
+names what the line would run — `:lauch` reads as `unknown` before you press
+Enter rather than after it.
+
+The listing and the dispatcher are the same table (`commands.rs`), checked
+against each other by a test that drives every documented command and fails if
+one comes back "Unknown command" — the same bargain `keys.rs` makes for the
+keymap. `launch!`, the forced variant the port-in-use prompt emits, is
+deliberately not listed: it skips a check that exists for a reason.
 
 ## Test
 

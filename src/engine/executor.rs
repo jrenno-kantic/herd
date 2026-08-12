@@ -869,6 +869,41 @@ mod tests {
         }
     }
 
+    /// Every command the listing shows must actually be dispatched.
+    ///
+    /// The half of the table that reaches the Executor, driven one at a
+    /// time against a config that does not exist — so a launch reports a
+    /// usage or a config error rather than spawning anything. "Unknown
+    /// command" is what `run_script` says when nothing claimed the line,
+    /// and it is the one answer a documented command may never give. This
+    /// is the same bargain `every_key_that_does_something_is_documented`
+    /// makes for the keymap: the listing is checked against the
+    /// dispatcher, not merely written alongside it.
+    #[tokio::test]
+    async fn every_documented_command_reaches_a_handler() {
+        use crate::commands::{Handler, ALL};
+
+        for command in ALL.iter().filter(|c| c.handler != Handler::App) {
+            let (tx, mut rx) = mpsc::unbounded_channel();
+            let executor = Executor::new(tx, no_config());
+            executor.run_command(command.probe.to_string());
+
+            let output = loop {
+                match rx.recv().await.expect("a completion") {
+                    UiEvent::CommandFinished { output, .. } => break output,
+                    // `cache` publishes its listing before completing.
+                    _ => continue,
+                }
+            };
+
+            assert_ne!(
+                output, "Unknown command",
+                "`:{}` is in the listing but nothing handles it",
+                command.usage
+            );
+        }
+    }
+
     #[test]
     fn split_extra_args_separates_model_and_overrides() {
         let (model, extra) = split_extra_args("gemma4-12b -- --ctx-size 65536");
