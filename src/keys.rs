@@ -66,8 +66,8 @@ pub const GLOBAL: &[Binding] = &[
     brief(&["tab", "right"], "tab/→", "screen", "next screen"),
     full(&["shift+tab", "left"], "⇧tab/←", "previous screen"),
     full(
-        &["1", "2", "3", "4", "5", "6"],
-        "1–6",
+        &["1", "2", "3", "4", "5", "6", "7"],
+        "1–7",
         "jump straight to a screen",
     ),
     brief(&["c"], "c", "config", "choose which models.ini to use"),
@@ -128,6 +128,26 @@ const MODELS: &[Binding] = &[
     ),
     brief(&["/"], "/", "filter", "filter presets by name"),
     brief(&["t", "T"], "t/T", "tier", "next/previous tier"),
+    // Last of the brief bindings deliberately: the drop order runs from
+    // the end, and of these keys a star is the one whose absence from a
+    // narrow footer costs least.
+    brief(
+        &["f"],
+        "f",
+        "star",
+        "star this preset, or take the star off",
+    ),
+    // Not in the footer, which is already two characters off its budget at
+    // 100 columns — the argv preview carries this hint on its own border
+    // instead, where the thing being copied is. Hence a terse `short`
+    // despite `brief: false`: that is what the border shows.
+    Binding {
+        keys: &["y"],
+        label: "y",
+        action: "copy the launch command to the clipboard",
+        short: "copy",
+        brief: false,
+    },
     full(&["r"], "r", "re-read models.ini from disk"),
 ];
 
@@ -140,6 +160,30 @@ const SERVER: &[Binding] = &[
     ),
     brief(&["s"], "s", "stop", "stop the server"),
     brief(&["p"], "p", "ping", "ping the running model"),
+];
+
+const ROUTER: &[Binding] = &[
+    brief(
+        &["+", "=", "-", "_"],
+        "+/-",
+        "adjust",
+        "adjust the highlighted setting",
+    ),
+    brief(
+        &["enter"],
+        "enter",
+        "start",
+        "start the router with these settings",
+    ),
+    brief(&["s"], "s", "stop", "stop the router"),
+    brief(&["r"], "r", "reset", "reset the settings to the defaults"),
+    Binding {
+        keys: &["y"],
+        label: "y",
+        action: "copy the router command to the clipboard",
+        short: "copy",
+        brief: false,
+    },
 ];
 
 const TEST: &[Binding] = &[
@@ -175,6 +219,9 @@ pub fn for_screen(screen: Screen) -> Vec<Binding> {
     let (moves, own): (bool, &[Binding]) = match screen {
         Screen::Models => (true, MODELS),
         Screen::Server => (false, SERVER),
+        // The shared movement keys, even though there are only two rows:
+        // they all reach `moved`, so they all have to be documented.
+        Screen::Router => (true, ROUTER),
         Screen::Test => (false, TEST),
         Screen::Stats => (false, STATS),
         Screen::Settings => (true, SETTINGS),
@@ -200,20 +247,88 @@ pub fn documents(screen: Screen, token: &str) -> bool {
 }
 
 /// One-line footer for a screen: its own brief bindings only, since the
-/// status bar already carries the global ones.
+/// status bar already carries the global ones. Every caller draws into a
+/// pane and so goes through [`screen_hint_within`]; this is the unfitted
+/// form the tests measure against.
+#[cfg_attr(not(test), allow(dead_code))]
 pub fn screen_hint(screen: Screen) -> String {
     join(for_screen(screen).iter().filter(|binding| binding.brief))
+}
+
+/// The same footer, fitted to the width it will be drawn in.
+///
+/// The hints outgrew the pane the moment a screen gained a seventh key:
+/// at 100 columns the Models footer had 74 to work with and wanted 76, and
+/// a footer that is too long does not wrap — its last hints simply
+/// disappear off the right edge, which is the same dishonesty the table's
+/// `Columns::for_width` exists to avoid. So hints are dropped from the
+/// end, least load-bearing first (the table is ordered that way), and the
+/// line **says that it dropped some**: `… ? more` points at the overlay
+/// that has all of them. A hint that vanished silently would read as a key
+/// that does not exist.
+pub fn screen_hint_within(screen: Screen, width: usize) -> String {
+    // An ellipsis, not "? more": the marker is subtracted from the room
+    // the real hints get, and at 100 columns the six characters of the
+    // longer form cost the Models footer its tier key — a hint worth more
+    // than the words explaining where the rest went. `?` is named in the
+    // status bar on every screen.
+    const MORE: &str = "…";
+
+    let bindings: Vec<Binding> = for_screen(screen)
+        .into_iter()
+        .filter(|binding| binding.brief)
+        .collect();
+
+    let full = join(bindings.iter());
+    if full.chars().count() <= width {
+        return full;
+    }
+
+    // Take from the front while what is taken, plus the marker saying
+    // there is more, still fits.
+    let mut kept = 0;
+    while kept < bindings.len() {
+        let candidate = join(bindings[..=kept].iter());
+        // Counted in characters, not bytes: the separator's `·` and the
+        // ellipsis are multi-byte, and `len()` here would reserve seven
+        // columns for four — enough to cost the Models footer a hint.
+        let marker = SEPARATOR.chars().count() + MORE.chars().count();
+        if candidate.chars().count() + marker > width {
+            break;
+        }
+        kept += 1;
+    }
+
+    if kept == 0 {
+        // Narrower than one hint plus the marker: say only where the rest
+        // is, rather than half a word.
+        return MORE.chars().take(width).collect();
+    }
+
+    format!("{}{SEPARATOR}{MORE}", join(bindings[..kept].iter()))
+}
+
+/// The footer form of one binding (`"y copy"`), for a screen that shows a
+/// hint somewhere other than in its footer. Looked up rather than written
+/// out a second time, which is the drift this table exists to prevent.
+pub fn hint_for(screen: Screen, key: &str) -> Option<String> {
+    for_screen(screen)
+        .iter()
+        .find(|binding| binding.keys.contains(&key))
+        .map(|binding| format!("{} {}", binding.label, binding.short))
 }
 
 pub fn global_hint() -> String {
     join(GLOBAL.iter().filter(|binding| binding.brief))
 }
 
+const SEPARATOR: &str = " · ";
+
 fn join<'a>(bindings: impl Iterator<Item = &'a Binding>) -> String {
     bindings
         .map(|binding| format!("{} {}", binding.label, binding.short))
         .collect::<Vec<_>>()
-        .join(" · ")
+        .join(SEPARATOR)
 }
 
 /// Canonical name for a key, so a binding table entry and a `KeyEvent`
@@ -293,22 +408,49 @@ mod tests {
         assert!(global_hint().contains("q quit"));
     }
 
-    /// A footer wider than the pane loses its last hints off the edge.
-    /// The narrowest pane in the layout is the main area beside the
-    /// 24-column sidebar on a 100-column terminal.
+    /// A footer wider than its pane loses its last hints off the edge,
+    /// silently. `screen_hint_within` is what stops that, and this is the
+    /// assertion that keeps it honest at every width a pane can have —
+    /// the same shape as `no_width_produces_a_row_that_overflows` for the
+    /// Models table.
     #[test]
-    fn footers_fit_the_pane_they_are_drawn_in() {
-        const BUDGET: usize = 100 - 24 - 2;
-
+    fn a_footer_never_overflows_the_pane_it_is_drawn_in() {
         for screen in Screen::ALL {
-            let hint = screen_hint(screen);
-            assert!(
-                hint.chars().count() <= BUDGET,
-                "{screen:?} footer is {} chars: {hint}",
-                hint.chars().count()
-            );
+            for width in 0..=140 {
+                let hint = screen_hint_within(screen, width);
+                assert!(
+                    hint.chars().count() <= width,
+                    "{screen:?} at {width}: {} chars — {hint}",
+                    hint.chars().count()
+                );
+            }
         }
         assert!(global_hint().chars().count() <= 100);
+    }
+
+    /// Dropping hints is allowed; dropping them without saying so is not.
+    /// A hint that vanished silently reads as a key that does not exist,
+    /// which is the whole failure this replaced.
+    #[test]
+    fn a_shortened_footer_says_there_is_more() {
+        let full = screen_hint(Screen::Models);
+        let width = full.chars().count() - 1;
+        let fitted = screen_hint_within(Screen::Models, width);
+
+        assert_ne!(fitted, full, "nothing was dropped at all");
+        assert!(fitted.ends_with('…'), "{fitted}");
+        // Even with no room for a single hint, it still says so.
+        assert_eq!(screen_hint_within(Screen::Models, 3), "…");
+    }
+
+    /// ...and a pane with room for everything shows everything.
+    #[test]
+    fn a_wide_pane_keeps_every_hint() {
+        for screen in Screen::ALL {
+            let full = screen_hint(screen);
+            assert_eq!(screen_hint_within(screen, 200), full, "{screen:?}");
+            assert!(!full.contains('…'));
+        }
     }
 
     #[test]

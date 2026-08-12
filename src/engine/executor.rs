@@ -155,6 +155,25 @@ impl Executor {
         });
     }
 
+    /// Puts a line of text on the system clipboard and says so.
+    ///
+    /// Fire and forget, and outside the `running` flag: it is one pipe
+    /// into `pbcopy`. The log line is written when the clipboard has
+    /// actually taken it, never before — a "copied" that was really a
+    /// missing `xclip` is worse than no key at all, because it is only
+    /// discovered at the paste.
+    pub fn copy(&self, label: String, text: String) {
+        let tx = self.tx.clone();
+
+        tokio::spawn(async move {
+            let message = match services::clipboard::copy(&text).await {
+                Ok(tool) => format!("copied the {label} launch command ({tool})"),
+                Err(error) => format!("could not reach the clipboard — {error}"),
+            };
+            let _ = tx.send(UiEvent::Log(message));
+        });
+    }
+
     /// Asks llama.cpp what it already has, and tells the UI.
     ///
     /// Fire and forget: the answer is an improvement on "unknown", never
@@ -599,8 +618,10 @@ fn split_extra_args(rest: &str) -> (String, Vec<String>) {
 /// `startrouter.sh` (`--models-max 2 --sleep-idle-seconds 300`). Anything
 /// else on the line is forwarded as extra llama-server flags.
 fn parse_router_flags(rest: &str) -> (u32, u32, Vec<String>) {
-    let mut models_max = 2;
-    let mut sleep_idle = 300;
+    // The same defaults the Router screen starts from, so a typed
+    // `:router` and an untouched screen cannot mean different things.
+    let mut models_max = llama::prefs::DEFAULT_MODELS_MAX;
+    let mut sleep_idle = llama::prefs::DEFAULT_SLEEP_IDLE_SECONDS;
     let mut extra = Vec::new();
 
     let tokens: Vec<&str> = rest.split_whitespace().collect();

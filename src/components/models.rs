@@ -129,7 +129,13 @@ fn table(frame: &mut Frame, app: &App, area: Rect) {
         Paragraph::new(vec![
             Line::styled(format!("  {}", describes(app)), Theme::logs()),
             Line::styled(
-                format!("  {}", keys::screen_hint(Screen::Models)),
+                format!(
+                    "  {}",
+                    keys::screen_hint_within(
+                        Screen::Models,
+                        components::hint_width(chunks[2].width, false, 0)
+                    )
+                ),
                 Theme::logs(),
             ),
         ]),
@@ -154,8 +160,13 @@ fn table(frame: &mut Frame, app: &App, area: Rect) {
         let selected = index == app.llama.cursor;
         let is_active = app.llama.server.model.as_deref() == Some(row.name.as_str());
         let glyph = lifecycle_glyph(&app.llama.server.state, is_active);
+        let favorite = app.llama.is_favorite(&row.name);
 
-        let marker = format!("{}{glyph}", if selected { '▸' } else { ' ' });
+        let marker = format!(
+            "{}{}{glyph}",
+            if selected { '▸' } else { ' ' },
+            if favorite { STAR } else { ' ' }
+        );
 
         let fit = app.llama.fit(&row.name);
         let estimate = app
@@ -192,7 +203,23 @@ fn table(frame: &mut Frame, app: &App, area: Rect) {
             (false, _, _) => Theme::normal(),
         };
 
-        items.push(ListItem::new(Line::styled(text, style)));
+        // The star is the one part of a row with a colour of its own, so
+        // the line is split rather than styled whole. Not on the selected
+        // row: gold on the selection's green background is unreadable,
+        // and a row you are looking at does not need highlighting twice.
+        items.push(match (favorite, selected) {
+            (true, false) => {
+                let mut rest = text.chars();
+                let lead: String = rest.by_ref().take(1).collect();
+                let star: String = rest.by_ref().take(1).collect();
+                ListItem::new(Line::from(vec![
+                    Span::styled(lead, style),
+                    Span::styled(star, Theme::favorite()),
+                    Span::styled(rest.collect::<String>(), style),
+                ]))
+            }
+            _ => ListItem::new(Line::styled(text, style)),
+        });
     }
 
     // Built fresh each frame, so the offset is recomputed from the cursor
@@ -221,6 +248,11 @@ struct Columns {
     spec: bool,
 }
 
+/// The favourite marker. A column of its own inside the marker field
+/// rather than a colour on the name: colour alone does not survive a
+/// screenshot, a colour-blind reader or a terminal with its own palette.
+const STAR: char = '★';
+
 /// Fixed widths. `repo` is the only elastic one.
 const W_NAME: usize = 22;
 const W_CTX: usize = 7;
@@ -229,7 +261,8 @@ const W_OPT: usize = 10;
 const W_CAPS: usize = 5;
 const W_SPEC: usize = 6;
 const W_LOCAL: usize = 9;
-const W_MARKER: usize = 2;
+/// Selection caret, favourite star, lifecycle glyph.
+const W_MARKER: usize = 3;
 const REPO_MIN: usize = 12;
 const REPO_MAX: usize = 30;
 
@@ -331,6 +364,17 @@ impl Columns {
         spec: &str,
         local: &str,
     ) -> String {
+        // Padded and clipped here rather than trusted: the marker is
+        // built by the caller out of a caret, a star and a lifecycle
+        // glyph, any of which can be absent, and a marker one character
+        // short shifts every column on the row out of line with the
+        // header.
+        let marker: String = marker
+            .chars()
+            .chain(std::iter::repeat(' '))
+            .take(W_MARKER)
+            .collect();
+
         let mut line = format!(
             "{marker}{:<W_NAME$} {:<width$}",
             truncate(name, W_NAME),
@@ -444,14 +488,21 @@ fn preview(app: &App) -> Paragraph<'static> {
         Err(error) => error,
     };
 
-    Paragraph::new(text)
-        .style(Theme::logs())
-        .block(block(" argv preview ".to_string()))
+    // The copy key is advertised here rather than in the footer: that line
+    // is already at its width budget on a 100-column terminal, and the
+    // hint belongs beside what it acts on. Read out of `keys.rs` so the
+    // key named here and the key handled cannot drift apart.
+    let mut block = block(" argv preview ".to_string());
+    if let Some(hint) = keys::hint_for(Screen::Models, "y") {
+        block = block.title_top(Line::styled(format!(" {hint} "), Theme::border()).right_aligned());
+    }
+
+    Paragraph::new(text).style(Theme::logs()).block(block)
 }
 
 /// Renders the argv the way a shell user would write it: one logical
 /// option per line, so a 20-flag command stays readable.
-fn wrap_argv(argv: &[String]) -> String {
+pub fn wrap_argv(argv: &[String]) -> String {
     let mut lines = vec!["llama-server \\".to_string()];
     let mut current = String::from("  ");
 
@@ -550,7 +601,7 @@ mod column_tests {
         let columns = Columns::for_width(WIDE);
         let header = columns.header();
         let row = columns.row(
-            "▸●",
+            "▸★●",
             "gemma4-12b",
             "unsloth/gemma-4-12B-it-qat-GGUF:UD-Q4_K_XL",
             "32768",
@@ -565,6 +616,17 @@ mod column_tests {
             header.chars().count(),
             row.chars().count(),
             "header:\n{header}\nrow:\n{row}"
+        );
+
+        // An unstarred, unselected, not-serving row supplies none of the
+        // three marker glyphs, and must still line up with the rest.
+        assert_eq!(
+            columns
+                .row("", "n", "r", "c", "m", "o", "p", "s", "l")
+                .chars()
+                .count(),
+            header.chars().count(),
+            "a row with no marker at all fell out of line"
         );
     }
 

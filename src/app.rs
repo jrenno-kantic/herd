@@ -1,11 +1,18 @@
 use crate::event::UiEvent;
+use crate::services::clipboard;
 use crate::services::llama::{
-    self, api::ChatOutcome, hub::Availability, ini::LlamaConfig, memory, overrides::Scope, Budget,
-    Fit, LauncherMode, Overrides, Phase, ServerState, Tier,
+    self,
+    api::ChatOutcome,
+    hub::Availability,
+    ini::LlamaConfig,
+    memory,
+    overrides::Scope,
+    prefs::{self, Prefs, RouterPrefs},
+    Budget, Fit, LauncherMode, Overrides, Phase, ServerState, Tier,
 };
 use chrono::{DateTime, Local};
 use crossterm::event::{KeyCode, KeyEvent};
-use std::collections::VecDeque;
+use std::collections::{BTreeSet, VecDeque};
 use std::path::PathBuf;
 use std::time::Instant;
 
@@ -15,6 +22,11 @@ const MAX_LOGS: usize = 500;
 pub enum Screen {
     Models,
     Server,
+    /// llama-server's built-in multi-model mode. Sits next to Server
+    /// because it is the same lifecycle seen from the other end — one
+    /// process that loads and unloads presets by itself — and the digits
+    /// are worth renumbering to keep those two together.
+    Router,
     Test,
     Stats,
     Settings,
@@ -22,9 +34,10 @@ pub enum Screen {
 }
 
 impl Screen {
-    pub const ALL: [Screen; 6] = [
+    pub const ALL: [Screen; 7] = [
         Screen::Models,
         Screen::Server,
+        Screen::Router,
         Screen::Test,
         Screen::Stats,
         Screen::Settings,
@@ -35,6 +48,7 @@ impl Screen {
         match self {
             Screen::Models => "Models",
             Screen::Server => "Server",
+            Screen::Router => "Router",
             Screen::Test => "Test",
             Screen::Stats => "Stats",
             Screen::Settings => "Settings",
@@ -94,6 +108,16 @@ pub enum Action {
         model: String,
         prompt: String,
     },
+    /// Put a line of text on the system clipboard. Structured for the
+    /// same reason as `RunChat`: the payload is a shell command, complete
+    /// with quotes and spaces, and must never be re-parsed out of a
+    /// command string.
+    CopyToClipboard {
+        /// What was copied, for the log line the Executor writes once the
+        /// clipboard has actually taken it.
+        label: String,
+        text: String,
+    },
     /// Fetch a preset's artifacts, optionally launching it afterwards.
     /// Like `RunChat`, structured rather than a command string: the repo
     /// reference and the "and then launch" flag must not be re-parsed out
@@ -148,6 +172,26 @@ impl SettingRow {
                 override_value.as_deref(),
             )),
         }
+    }
+}
+
+/// One editable number on the Router screen.
+///
+/// The two settings the router mode is actually about — how many models
+/// stay loaded, and how long an idle one survives — carried as data so the
+/// screen renders them from a list rather than from two hand-written
+/// lines, and so `+`/`-` has something to index.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct RouterSetting {
+    pub key: &'static str,
+    pub value: u32,
+    pub unit: &'static str,
+    pub describes: &'static str,
+}
+
+impl RouterSetting {
+    pub fn value_label(&self) -> String {
+        format!("{}{}", self.value, self.unit)
     }
 }
 
@@ -307,6 +351,16 @@ pub struct LauncherState {
     pub cursor: usize,
     pub filter: String,
     pub overrides: Overrides,
+    /// Presets marked with a star, by name. Kept across restarts in
+    /// `~/.herd_config`, and keyed by name rather than by tier because
+    /// `gemma4-12b` in the 16gb tier and in the 32gb one are the same
+    /// model — see `prefs.rs`.
+    pub favorites: BTreeSet<String>,
+    /// What the Router screen would start llama-server's built-in router
+    /// with. Persisted, since they are settings, not session state.
+    pub router: RouterPrefs,
+    /// Which of the two router settings the Router screen has selected.
+    pub router_cursor: usize,
     pub settings_cursor: usize,
     pub edit_buffer: String,
     pub server: ServerRuntime,
@@ -339,7 +393,7 @@ pub struct LauncherState {
 }
 
 impl LauncherState {
-    fn new(config_path: PathBuf, last_launched: Option<String>) -> Self {
+    fn new(config_path: PathBuf, last_launched: Option<String>, prefs: Prefs) -> Self {
         let mut state = Self {
             config_path,
             config: None,
@@ -348,7 +402,10 @@ impl LauncherState {
             ram_gib: llama::ini::installed_ram_gib(),
             cursor: 0,
             filter: String::new(),
-            overrides: Overrides::default(),
+            overrides: prefs.overrides,
+            favorites: prefs.favorites,
+            router: prefs.router,
+            router_cursor: 0,
             settings_cursor: 0,
             edit_buffer: String::new(),
             server: ServerRuntime::default(),
@@ -396,6 +453,98 @@ impl LauncherState {
         if let Some(index) = self.rows().iter().position(|row| row.name == last) {
             self.cursor = index;
         }
+    }
+
+    pub fn is_favorite(&self, model: &str) -> bool {
+        self.favorites.contains(model)
+    }
+
+    /// Stars the highlighted preset, or takes the star off. Returns what
+    /// it did, so the caller can say so without asking again.
+    ///
+    /// The list is deliberately **not** reordered around favourites. A
+    /// table people navigate by position — third row down, the one under
+    /// the 12B — must not rearrange itself because a star was added
+    /// somewhere above; the star is a marker on the row you already know,
+    /// not a new sort order.
+    fn toggle_favorite(&mut self) -> Option<(String, bool)> {
+        let model = self.selected_model()?;
+
+        let starred = if self.favorites.remove(&model) {
+            false
+        } else {
+            self.favorites.insert(model.clone());
+            true
+        };
+        Some((model, starred))
+    }
+
+    /// The two router numbers as editable rows, in the order the screen
+    /// shows them.
+    pub fn router_rows(&self) -> [RouterSetting; 2] {
+        [
+            RouterSetting {
+                key: "models-max",
+                value: self.router.models_max,
+                unit: "",
+                describes: "models kept resident before one is unloaded",
+            },
+            RouterSetting {
+                key: "sleep-idle-seconds",
+                value: self.router.sleep_idle_seconds,
+                unit: "s",
+                describes: "idle time before a model is unloaded",
+            },
+        ]
+    }
+
+    /// Steps the highlighted router setting, snapped into range.
+    ///
+    /// `models-max` moves by one and idle time by half a minute: the
+    /// useful idle range is an hour wide, and stepping that a second at a
+    /// time is not editing, it is waiting.
+    fn adjust_router(&mut self, up: bool) {
+        let step = |value: u32, step: u32, (low, high): (u32, u32)| -> u32 {
+            if up {
+                value.saturating_add(step).min(high)
+            } else {
+                value.saturating_sub(step).max(low)
+            }
+        };
+
+        match self.router_cursor {
+            0 => {
+                self.router.models_max = step(self.router.models_max, 1, prefs::MODELS_MAX_RANGE);
+            }
+            _ => {
+                self.router.sleep_idle_seconds = step(
+                    self.router.sleep_idle_seconds,
+                    prefs::SLEEP_IDLE_STEP,
+                    prefs::SLEEP_IDLE_RANGE,
+                );
+            }
+        }
+    }
+
+    /// The argv `enter` on the Router screen would spawn, for the preview.
+    pub fn router_argv_preview(&self) -> Result<Vec<String>, String> {
+        let config = self
+            .config
+            .as_ref()
+            .ok_or_else(|| "no config loaded".to_string())?;
+
+        Ok(llama::ini::build_router_args(
+            config,
+            self.router.models_max,
+            self.router.sleep_idle_seconds,
+            &[],
+        ))
+    }
+
+    /// The same, as one line a shell will run.
+    pub fn router_shell_command(&self) -> Result<String, String> {
+        self.router_argv_preview()
+            .map(|argv| clipboard::shell_command(llama::process::BINARY, &argv))
     }
 
     pub fn model_names(&self) -> Vec<String> {
@@ -467,6 +616,16 @@ impl LauncherState {
             .ok_or_else(|| "no model selected".to_string())?;
 
         llama::ini::build_model_args(config, &model, &self.overrides.to_args(&model))
+    }
+
+    /// The same launch, as one line a shell will run.
+    ///
+    /// Built from `argv_preview` rather than from the wrapped text on
+    /// screen, so what is copied is the argv herd would spawn — session
+    /// overrides included — and not a re-parse of a rendering.
+    pub fn shell_command(&self) -> Result<String, String> {
+        self.argv_preview()
+            .map(|argv| clipboard::shell_command(llama::process::BINARY, &argv))
     }
 
     pub fn tier_name(&self) -> Option<&str> {
@@ -854,6 +1013,9 @@ fn chrome(screen: Screen) -> u16 {
         Screen::Settings => 7 + 6,
         // command bar (3) + status (1) + borders (2) + position footer (1)
         Screen::Logs => 7,
+        // Two rows to move between, so paging is irrelevant, but the
+        // value still has to be sane.
+        Screen::Router => 12,
         // No list to page through; the value is unused but must be sane.
         Screen::Server | Screen::Test | Screen::Stats => 12,
     }
@@ -868,11 +1030,13 @@ impl App {
     }
 
     pub fn with_config_path(config_path: PathBuf) -> Self {
-        Self::restored(config_path, None)
+        Self::restored(config_path, None, Prefs::default())
     }
 
-    /// Builds the app with a remembered preset preselected.
-    pub fn restored(config_path: PathBuf, last_launched: Option<String>) -> Self {
+    /// Builds the app with a remembered preset preselected, and whatever
+    /// `~/.herd_config` remembers about favourites, overrides and the
+    /// router.
+    pub fn restored(config_path: PathBuf, last_launched: Option<String>, prefs: Prefs) -> Self {
         let mut logs = VecDeque::with_capacity(MAX_LOGS);
         logs.push_back("HERD started".into());
 
@@ -884,7 +1048,21 @@ impl App {
             log_scroll: 0,
             running: false,
             rows: DEFAULT_ROWS,
-            llama: LauncherState::new(config_path, last_launched),
+            llama: LauncherState::new(config_path, last_launched, prefs),
+        }
+    }
+
+    /// What to write to `~/.herd_config` on the way out.
+    ///
+    /// Taken here rather than saved as it changes, for the same reason the
+    /// session file is: `App::update` is a pure state transition and does
+    /// no I/O. The cost is that a `kill -9` loses the last few edits,
+    /// which is the same bargain the session file already makes.
+    pub fn prefs(&self) -> Prefs {
+        Prefs {
+            favorites: self.llama.favorites.clone(),
+            overrides: self.llama.overrides.clone(),
+            router: self.llama.router.clone(),
         }
     }
 
@@ -1112,7 +1290,7 @@ impl App {
                 self.mode = Mode::Help;
                 Action::None
             }
-            KeyCode::Char(c @ '1'..='6') => {
+            KeyCode::Char(c @ '1'..='7') => {
                 let index = c as usize - '1' as usize;
                 self.screen = Screen::ALL[index];
                 Action::None
@@ -1120,6 +1298,7 @@ impl App {
             _ => match self.screen {
                 Screen::Models => self.handle_models_key(key),
                 Screen::Server => self.handle_server_key(key),
+                Screen::Router => self.handle_router_key(key),
                 Screen::Test => self.handle_test_key(key),
                 Screen::Stats => self.handle_stats_key(key),
                 Screen::Settings => self.handle_settings_key(key),
@@ -1163,8 +1342,78 @@ impl App {
             }
             KeyCode::Enter => self.launch_selected(),
             KeyCode::Char('d') => self.download_selected(),
+            KeyCode::Char('y') => self.copy_selected(),
+            KeyCode::Char('f') => self.star_selected(),
             KeyCode::Char('s') => self.stop_server(),
             _ => Action::None,
+        }
+    }
+
+    /// Router screen: two numbers and the process they would start.
+    ///
+    /// `+`/`-` rather than an edit mode, matching the Stats screen's
+    /// memory reservation: both are single numbers with a sensible range,
+    /// and typing one is more keystrokes than nudging it.
+    fn handle_router_key(&mut self, key: KeyEvent) -> Action {
+        if let Some(cursor) = moved(
+            self.llama.router_cursor,
+            self.llama.router_rows().len(),
+            key.code,
+            self.page(),
+        ) {
+            self.llama.router_cursor = cursor;
+            return Action::None;
+        }
+
+        match key.code {
+            KeyCode::Char('+') | KeyCode::Char('=') => {
+                self.llama.adjust_router(true);
+                Action::None
+            }
+            KeyCode::Char('-') | KeyCode::Char('_') => {
+                self.llama.adjust_router(false);
+                Action::None
+            }
+            KeyCode::Char('r') => {
+                self.llama.router = RouterPrefs::default();
+                self.push_log("router settings reset to the defaults");
+                Action::None
+            }
+            KeyCode::Char('y') => self.copy_router(),
+            KeyCode::Char('s') => self.stop_server(),
+            // Always allowed, unlike the Server screen's Enter: the
+            // numbers it starts with are the ones on screen, and having
+            // just changed one is the reason to press it.
+            KeyCode::Enter => self.run(format!(
+                "router --max {} --idle {}",
+                self.llama.router.models_max, self.llama.router.sleep_idle_seconds
+            )),
+            _ => Action::None,
+        }
+    }
+
+    /// Stars the highlighted preset, or unstars it.
+    fn star_selected(&mut self) -> Action {
+        match self.llama.toggle_favorite() {
+            Some((model, true)) => self.push_log(format!("{model} starred")),
+            Some((model, false)) => self.push_log(format!("{model} unstarred")),
+            None => {}
+        }
+        Action::None
+    }
+
+    /// Copies the router's launch command, exactly as `y` does on the
+    /// Models screen — same question, same answer, same key.
+    fn copy_router(&mut self) -> Action {
+        match self.llama.router_shell_command() {
+            Ok(text) => Action::CopyToClipboard {
+                label: "router".into(),
+                text,
+            },
+            Err(error) => {
+                self.push_log(format!("nothing to copy: {error}"));
+                Action::None
+            }
         }
     }
 
@@ -1669,6 +1918,31 @@ impl App {
         self.run(format!("launch {model}"))
     }
 
+    /// Copies the highlighted preset's launch command to the clipboard.
+    ///
+    /// The argv preview has always been the answer to "what would this
+    /// actually run?", and the answer was only ever readable, never
+    /// usable: reproducing it meant retyping twenty flags out of a pane in
+    /// an alt-screen the mouse cannot select cleanly. The copy is the same
+    /// argv the launch would spawn — overrides included — quoted onto one
+    /// line, so it can be pasted into a shell, a script or a bug report.
+    ///
+    /// Deliberately outside the `running` flag: putting a line of text on
+    /// the clipboard is not work the UI waits for, and it must stay
+    /// available while a launch or a download is in flight — a command
+    /// that failed is exactly when someone wants to run it by hand.
+    fn copy_selected(&mut self) -> Action {
+        let model = self.llama.selected_model().unwrap_or_else(|| "-".into());
+
+        match self.llama.shell_command() {
+            Ok(text) => Action::CopyToClipboard { label: model, text },
+            Err(error) => {
+                self.push_log(format!("nothing to copy: {error}"));
+                Action::None
+            }
+        }
+    }
+
     /// Fetches the highlighted preset without launching it.
     ///
     /// Worth its own key rather than only happening on the way to a
@@ -1839,6 +2113,21 @@ mod tests {
 
     fn ch(c: char) -> UiEvent {
         key(KeyCode::Char(c))
+    }
+
+    /// Presses the digit that jumps to `screen`, worked out from
+    /// `Screen::ALL` rather than written down. The digits are positional,
+    /// so inserting a screen renumbers every one after it — and a test
+    /// that hard-codes `3` does not fail then, it quietly starts testing a
+    /// different screen.
+    fn jump(app: &mut App, screen: Screen) {
+        let index = Screen::ALL
+            .iter()
+            .position(|&candidate| candidate == screen)
+            .expect("screen is in the table");
+        let digit = char::from_digit(index as u32 + 1, 10).expect("a digit per screen");
+
+        app.update(ch(digit));
     }
 
     const SAMPLE_INI: &str = r#"
@@ -2212,14 +2501,11 @@ alias = qwen3-coder
     fn tab_cycles_screens_and_wraps() {
         let mut app = app_with_sample();
         assert_eq!(app.screen, Screen::Models);
-        for expected in [
-            Screen::Server,
-            Screen::Test,
-            Screen::Stats,
-            Screen::Settings,
-            Screen::Logs,
-            Screen::Models,
-        ] {
+
+        // Walked off `Screen::ALL` rather than written out: a screen
+        // inserted in the middle must not need this test edited to keep
+        // meaning "Tab visits every screen, in order, and wraps".
+        for expected in Screen::ALL.into_iter().skip(1).chain([Screen::Models]) {
             app.update(key(KeyCode::Tab));
             assert_eq!(app.screen, expected);
         }
@@ -2228,12 +2514,12 @@ alias = qwen3-coder
     #[test]
     fn digits_jump_straight_to_a_screen() {
         let mut app = app_with_sample();
-        app.update(ch('5'));
-        assert_eq!(app.screen, Screen::Settings);
-        app.update(ch('3'));
-        assert_eq!(app.screen, Screen::Test);
-        app.update(ch('1'));
-        assert_eq!(app.screen, Screen::Models);
+
+        for (index, screen) in Screen::ALL.into_iter().enumerate() {
+            let digit = char::from_digit(index as u32 + 1, 10).expect("a digit per screen");
+            app.update(ch(digit));
+            assert_eq!(app.screen, screen, "{digit} went to the wrong screen");
+        }
     }
 
     #[test]
@@ -2348,6 +2634,46 @@ alias = qwen3-coder
         assert!(argv.windows(2).any(|w| w == ["--ctx-size", "65536"]));
     }
 
+    /// `y` copies the launch the preview is describing, not a rendering of
+    /// it: the same argv, the session overrides included, as one runnable
+    /// line. The clipboard itself is the Executor's business — `update`
+    /// stays pure and only hands over the text.
+    #[test]
+    fn y_copies_the_launch_command_for_the_highlighted_preset() {
+        let mut app = app_with_sample();
+        app.llama
+            .overrides
+            .set(Scope::Model, "gemma4-12b", "ctx-size", "65536");
+
+        let Action::CopyToClipboard { label, text } = app.update(ch('y')) else {
+            panic!("y did not copy anything");
+        };
+
+        assert_eq!(label, "gemma4-12b");
+        assert!(text.starts_with("llama-server "), "{text}");
+        assert!(text.contains("--alias gemma4-12b"), "{text}");
+        assert!(text.contains("--ctx-size 65536"), "the override: {text}");
+        assert!(!text.contains('\n'), "one line, to be pasted: {text}");
+        // Not command work: it must stay usable while a launch or a
+        // download is in flight.
+        assert!(!app.running);
+    }
+
+    /// Nothing to copy is said, not silently ignored — a key that
+    /// sometimes does nothing without saying so reads as broken.
+    #[test]
+    fn copying_with_no_config_loaded_says_so() {
+        let mut app = App::with_config_path(PathBuf::from("/nonexistent/models.ini"));
+        app.screen = Screen::Models;
+
+        assert!(matches!(app.update(ch('y')), Action::None));
+        assert!(
+            app.logs.iter().any(|line| line.contains("nothing to copy")),
+            "{:?}",
+            app.logs
+        );
+    }
+
     #[test]
     fn settings_rows_cover_server_defaults_and_the_selected_model() {
         let app = app_with_sample();
@@ -2368,7 +2694,7 @@ alias = qwen3-coder
     #[test]
     fn editing_a_setting_records_a_session_override() {
         let mut app = app_with_sample();
-        app.update(ch('5')); // Settings
+        jump(&mut app, Screen::Settings);
         app.update(key(KeyCode::Enter)); // edit the first entry ([server] host)
 
         assert_eq!(app.mode, Mode::EditSetting);
@@ -2395,7 +2721,7 @@ alias = qwen3-coder
     #[test]
     fn enter_flips_a_boolean_setting_instead_of_editing_it() {
         let mut app = app_with_sample();
-        app.update(ch('5')); // Settings
+        jump(&mut app, Screen::Settings);
 
         // Walk to `jinja = true` in [server].
         let jinja = app
@@ -2430,7 +2756,7 @@ alias = qwen3-coder
     #[test]
     fn enter_still_edits_a_setting_that_is_not_a_boolean() {
         let mut app = app_with_sample();
-        app.update(ch('5'));
+        jump(&mut app, Screen::Settings);
         app.update(key(KeyCode::Enter)); // [server] host
 
         assert_eq!(app.mode, Mode::EditSetting);
@@ -2446,7 +2772,7 @@ alias = qwen3-coder
             .overrides
             .set(Scope::Global, "", "host", "127.0.0.1");
 
-        app.update(ch('5'));
+        jump(&mut app, Screen::Settings);
         app.update(key(KeyCode::Enter));
         for _ in 0.."127.0.0.1".len() {
             app.update(key(KeyCode::Backspace));
@@ -2462,7 +2788,7 @@ alias = qwen3-coder
     #[test]
     fn esc_abandons_an_edit_without_recording_anything() {
         let mut app = app_with_sample();
-        app.update(ch('5'));
+        jump(&mut app, Screen::Settings);
         app.update(key(KeyCode::Enter));
         app.update(ch('9'));
         app.update(key(KeyCode::Esc));
@@ -2479,7 +2805,7 @@ alias = qwen3-coder
             .set(Scope::Global, "", "host", "1.2.3.4");
         app.llama.overrides.set(Scope::Global, "", "port", "8080");
 
-        app.update(ch('5'));
+        jump(&mut app, Screen::Settings);
         app.update(ch('x')); // cursor is on the first entry: host
         assert_eq!(app.llama.overrides.get(Scope::Global, "", "host"), None);
         assert_eq!(app.llama.overrides.count(), 1);
@@ -2534,7 +2860,7 @@ alias = qwen3-coder
     fn a_remembered_model_preselects_its_row() {
         let mut app = app_with_sample();
         let path = app.llama.config_path.clone();
-        app = App::restored(path, Some("qwen3-coder".into()));
+        app = App::restored(path, Some("qwen3-coder".into()), Prefs::default());
 
         assert_eq!(app.llama.cursor, 1);
         assert_eq!(app.llama.selected_model().as_deref(), Some("qwen3-coder"));
@@ -2601,7 +2927,7 @@ alias = qwen3-coder
     fn enter_probes_the_serving_model() {
         let mut app = app_with_sample();
         serving(&mut app, "gemma4-12b");
-        app.update(ch('3')); // Test
+        jump(&mut app, Screen::Test);
 
         match app.update(key(KeyCode::Enter)) {
             Action::RunChat { model, prompt } => {
@@ -2618,7 +2944,7 @@ alias = qwen3-coder
     #[test]
     fn a_probe_is_refused_while_the_server_is_off() {
         let mut app = app_with_sample();
-        app.update(ch('3'));
+        jump(&mut app, Screen::Test);
 
         assert!(matches!(app.update(key(KeyCode::Enter)), Action::None));
         assert!(!app.llama.chat_pending);
@@ -2628,7 +2954,7 @@ alias = qwen3-coder
     fn a_second_probe_is_refused_while_one_is_in_flight() {
         let mut app = app_with_sample();
         serving(&mut app, "gemma4-12b");
-        app.update(ch('3'));
+        jump(&mut app, Screen::Test);
         app.update(key(KeyCode::Enter));
 
         assert!(matches!(app.update(key(KeyCode::Enter)), Action::None));
@@ -2638,7 +2964,7 @@ alias = qwen3-coder
     fn the_prompt_can_be_edited_and_is_used_for_the_next_probe() {
         let mut app = app_with_sample();
         serving(&mut app, "gemma4-12b");
-        app.update(ch('3'));
+        jump(&mut app, Screen::Test);
         app.update(ch('e'));
 
         assert_eq!(app.mode, Mode::EditPrompt);
@@ -2665,7 +2991,7 @@ alias = qwen3-coder
     #[test]
     fn an_empty_prompt_is_rejected() {
         let mut app = app_with_sample();
-        app.update(ch('3'));
+        jump(&mut app, Screen::Test);
         app.update(ch('e'));
         for _ in 0.."Bonjour".len() {
             app.update(key(KeyCode::Backspace));
@@ -2678,7 +3004,7 @@ alias = qwen3-coder
     #[test]
     fn esc_abandons_a_prompt_edit() {
         let mut app = app_with_sample();
-        app.update(ch('3'));
+        jump(&mut app, Screen::Test);
         app.update(ch('e'));
         app.update(ch('X'));
         app.update(key(KeyCode::Esc));
@@ -2691,7 +3017,7 @@ alias = qwen3-coder
     fn a_chat_result_clears_the_pending_flag_and_is_kept() {
         let mut app = app_with_sample();
         serving(&mut app, "gemma4-12b");
-        app.update(ch('3'));
+        jump(&mut app, Screen::Test);
         app.update(key(KeyCode::Enter));
         assert!(app.llama.chat_pending);
 
@@ -2714,7 +3040,7 @@ alias = qwen3-coder
     fn a_failed_probe_is_reported_and_still_clears_the_flag() {
         let mut app = app_with_sample();
         serving(&mut app, "gemma4-12b");
-        app.update(ch('3'));
+        jump(&mut app, Screen::Test);
         app.update(key(KeyCode::Enter));
 
         app.update(UiEvent::ChatResult(Box::new(Err("HTTP 503".into()))));
@@ -2902,7 +3228,7 @@ alias = qwen3-coder
     fn the_reserved_ratio_can_be_raised_and_lowered() {
         let mut app = app_with_sample();
         app.llama.ram_gib = Some(32);
-        app.update(ch('4')); // Stats
+        jump(&mut app, Screen::Stats);
 
         let default = app.llama.reserved_ratio;
         app.update(ch('+'));
@@ -2916,7 +3242,7 @@ alias = qwen3-coder
     #[test]
     fn the_reserved_ratio_stops_at_its_bounds() {
         let mut app = app_with_sample();
-        app.update(ch('4'));
+        jump(&mut app, Screen::Stats);
 
         for _ in 0..40 {
             app.update(ch('-'));
@@ -2934,7 +3260,7 @@ alias = qwen3-coder
     fn lowering_past_the_default_logs_a_caution() {
         let mut app = app_with_sample();
         app.llama.ram_gib = Some(32);
-        app.update(ch('4'));
+        jump(&mut app, Screen::Stats);
         app.update(ch('-'));
 
         assert!(app.llama.budget().is_risky());
@@ -2948,12 +3274,146 @@ alias = qwen3-coder
     #[test]
     fn r_restores_the_default_reservation() {
         let mut app = app_with_sample();
-        app.update(ch('4'));
+        jump(&mut app, Screen::Stats);
         app.update(ch('-'));
         app.update(ch('r'));
 
         assert_eq!(app.llama.reserved_ratio, memory::DEFAULT_RESERVED_RATIO);
         assert!(!app.llama.budget().is_risky());
+    }
+
+    #[test]
+    fn f_stars_the_highlighted_preset_and_unstars_it() {
+        let mut app = app_with_sample();
+        assert!(!app.llama.is_favorite("gemma4-12b"));
+
+        app.update(ch('f'));
+        assert!(app.llama.is_favorite("gemma4-12b"));
+        assert!(app.logs.iter().any(|line| line.contains("starred")));
+
+        app.update(ch('f'));
+        assert!(!app.llama.is_favorite("gemma4-12b"));
+    }
+
+    /// The star must not move the row it is on. A table people navigate
+    /// by position is not allowed to rearrange itself under them.
+    #[test]
+    fn starring_a_preset_leaves_the_order_alone() {
+        let mut app = app_with_sample();
+        let before: Vec<String> = app
+            .llama
+            .rows()
+            .iter()
+            .map(|row| row.name.clone())
+            .collect();
+
+        app.update(key(KeyCode::Down));
+        app.update(ch('f'));
+
+        let after: Vec<String> = app
+            .llama
+            .rows()
+            .iter()
+            .map(|row| row.name.clone())
+            .collect();
+        assert_eq!(before, after);
+        assert_eq!(app.llama.cursor, 1, "the cursor followed a reordering");
+    }
+
+    /// The whole point of `~/.herd_config`: what was set on purpose is
+    /// still set next time. Exercised end to end through the same two
+    /// calls `main.rs` makes, since that is where the round trip can
+    /// break.
+    #[test]
+    fn favourites_and_overrides_come_back_next_session() {
+        let mut app = app_with_sample();
+        app.update(ch('f'));
+        app.llama
+            .overrides
+            .set(Scope::Model, "gemma4-12b", "ctx-size", "65536");
+        app.llama.router.models_max = 5;
+
+        let path = app.llama.config_path.clone();
+        let saved = app.prefs();
+
+        let restored = App::restored(path, None, saved);
+        assert!(restored.llama.is_favorite("gemma4-12b"));
+        assert_eq!(
+            restored
+                .llama
+                .overrides
+                .get(Scope::Model, "gemma4-12b", "ctx-size"),
+            Some("65536")
+        );
+        assert_eq!(restored.llama.router.models_max, 5);
+    }
+
+    #[test]
+    fn the_router_screen_adjusts_its_settings_and_stops_at_the_bounds() {
+        let mut app = app_with_sample();
+        jump(&mut app, Screen::Router);
+
+        app.update(ch('+'));
+        assert_eq!(app.llama.router.models_max, prefs::DEFAULT_MODELS_MAX + 1);
+
+        // Held down past the end: it stops, it does not wrap or overflow.
+        for _ in 0..40 {
+            app.update(ch('-'));
+        }
+        assert_eq!(app.llama.router.models_max, prefs::MODELS_MAX_RANGE.0);
+
+        app.update(key(KeyCode::Down));
+        app.update(ch('+'));
+        assert_eq!(
+            app.llama.router.sleep_idle_seconds,
+            prefs::DEFAULT_SLEEP_IDLE_SECONDS + prefs::SLEEP_IDLE_STEP
+        );
+
+        app.update(ch('r'));
+        assert_eq!(app.llama.router, RouterPrefs::default());
+    }
+
+    /// Enter starts the router with the numbers on screen — the reason
+    /// the screen exists, and the one thing that must not go through a
+    /// re-typed command line.
+    #[test]
+    fn enter_on_the_router_screen_starts_it_with_the_settings_shown() {
+        let mut app = app_with_sample();
+        jump(&mut app, Screen::Router);
+        app.llama.router = RouterPrefs {
+            models_max: 4,
+            sleep_idle_seconds: 120,
+        };
+
+        match app.update(key(KeyCode::Enter)) {
+            Action::RunCommand(command) => assert_eq!(command, "router --max 4 --idle 120"),
+            other => panic!("expected a router command, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn the_router_preview_is_the_argv_the_router_would_spawn() {
+        let mut app = app_with_sample();
+        app.llama.router = RouterPrefs {
+            models_max: 3,
+            sleep_idle_seconds: 60,
+        };
+
+        let argv = app.llama.router_argv_preview().expect("preview");
+        assert!(
+            argv.windows(2).any(|w| w == ["--models-max", "3"]),
+            "{argv:?}"
+        );
+        assert!(
+            argv.windows(2).any(|w| w == ["--sleep-idle-seconds", "60"]),
+            "{argv:?}"
+        );
+        assert!(
+            argv.iter().any(|token| token == "--models-preset"),
+            "the router serves the whole file: {argv:?}"
+        );
+        // ...and it is the same [server] block the presets inherit.
+        assert!(argv.windows(2).any(|w| w == ["--port", "1234"]), "{argv:?}");
     }
 
     /// Freeing reserved memory is the point of the override: it must

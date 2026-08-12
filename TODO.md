@@ -132,3 +132,79 @@
     - Left alone: the 50 ms keyboard poll (raising it trades input latency
       for a few wakeups) and the 17 runtime threads (they cost virtual
       address space, not RSS). Neither is justified by the measurements.
+
+- [x] Add an option to handle favorite models with a golden star
+  - [x] Add toggle favorite feature on models → `f` stars the highlighted
+        preset and takes the star off again; `★` is drawn in the marker
+        field (now three wide: caret, star, lifecycle glyph) in gold, and
+        the star is a *glyph* rather than a colour so it survives a
+        screenshot, a colour-blind reader and a terminal with its own
+        palette. Not drawn in gold on the selected row, where gold on the
+        selection's green is unreadable.
+    - **The list is deliberately not reordered around favourites.** A
+      table people navigate by position must not rearrange itself because
+      a star was added above; there is a test for it.
+    - `Columns::row` now pads and clips the marker itself. It was assumed
+      to be exactly `W_MARKER` wide, and a row that supplies no glyphs at
+      all — unstarred, unselected, not serving — would otherwise slide
+      out of line with the header.
+- [x] Add in app preferences file like ~/.herd_config (classical macosx way not local app files)
+  - [x] Save custom model settings in this config file → `services/llama/
+        prefs.rs`. A pretty-printed JSON dotfile in `$HOME`, sorted keys,
+        meant to be read and edited by hand.
+    - It holds favourites, the setting overrides and the router numbers.
+      **The old "session-only" rule is unchanged where it mattered**:
+      `models.ini` is hand-written and commented and herd still never
+      writes to it. That was always about the *ini*, not about forgetting,
+      so overrides now live in a file herd owns and a preset tuned once
+      stays tuned.
+    - Keyed by preset name, not by tier: `gemma4-12b` is in both shipped
+      tiers and is the same model.
+    - Reading never fails (missing/corrupt = no preferences yet, since
+      losing a convenience must not stop start-up); **writing does report
+      failure**, unlike `session.json` — after the alternate screen is
+      restored, so the message is actually visible. Written via a
+      temporary file and a rename, so an interrupted save cannot truncate
+      the previous one.
+    - Saved from `main.rs` on exit, like the session file, because
+      `App::update` stays pure and does no I/O.
+    - **Left out on purpose:** the memory reservation (Stats `+`/`-`)
+      stays session-only. It is a property of the machine you are on at
+      the moment, not a preset setting, and the TODO asked for model
+      settings. Say the word and it is two lines.
+- [x] Add a feature to start llama-server as router mode (with current tier)
+  - [x] Add a router screen to specify router settings like models-max,
+        sleep-idle-seconds → **screen 3**, straight after Server: it is
+        the same lifecycle seen from the other end, one process that loads
+        and unloads presets itself. `j/k` moves between the two settings,
+        `+`/`-` to adjust (matching the Stats screen's reservation rather
+        than opening an edit mode for a single number), `enter` starts the
+        router with exactly what is on screen, `s` stops it, `r` resets,
+        `y` copies the command.
+    - It carries the same live **argv preview** as the Models screen: the
+      two numbers only mean anything as the flags they become, and
+      `:router --max N --idle S` passed them where nobody could see them.
+    - The state line reports the supervised process **only when it is the
+      router**. A single preset serving from the Models screen is not this
+      screen's business, and showing SERVING for it would claim the router
+      was up when it is not.
+    - Defaults (2 models, 300s) are now shared with `parse_router_flags`,
+      so a typed `:router` and an untouched screen cannot disagree.
+    - Inserting a screen renumbered `1`–`7`. The tests that navigated by
+      digit now derive the digit from `Screen::ALL`: hard-coding `3` does
+      not *fail* when a screen is inserted, it quietly starts testing a
+      different screen.
+    - **Not done:** the port-in-use prompt still does not cover router
+      mode (it never did for `:router`); a busy port surfaces as
+      llama-server's own bind error in the log.
+
+- [x] Screen footers now fit the pane they are drawn in
+      (`keys::screen_hint_within`). The hints outgrew the line the moment
+      a screen gained a seventh key — at 100 columns the Models footer had
+      74 and wanted 76 — and a footer that is too long does not wrap, it
+      silently loses its last hints off the right edge, which is exactly
+      the dishonesty `Columns::for_width` exists to prevent for the table.
+      Hints are dropped from the end, least load-bearing first, and the
+      line ends in `…` to say so. The marker is an ellipsis rather than
+      "? more" because those six characters cost the Models footer its
+      tier key, and `?` is already named in the status bar.

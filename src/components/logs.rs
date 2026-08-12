@@ -6,7 +6,7 @@
 //! hidden below the viewport, which is why 0 means "follow the newest
 //! line" and needs no separate follow flag.
 
-use crate::{app::App, app::Screen, keys, theme::Theme};
+use crate::{app::App, app::Screen, components, keys, theme::Theme};
 use ratatui::layout::{Constraint, Direction, Layout, Margin, Rect};
 use ratatui::widgets::{
     Block, Borders, Paragraph, Scrollbar, ScrollbarOrientation, ScrollbarState,
@@ -43,7 +43,7 @@ pub fn render(frame: &mut Frame, app: &App, area: Rect) {
         chunks[0],
     );
     frame.render_widget(
-        Paragraph::new(footer(app, top, height, pinned)).style(Theme::logs()),
+        Paragraph::new(footer(app, top, height, pinned, chunks[1].width)).style(Theme::logs()),
         chunks[1],
     );
 
@@ -89,7 +89,7 @@ fn viewport(total: usize, height: usize, scroll: usize) -> (usize, bool) {
     (max_scroll - scroll, scroll > 0)
 }
 
-fn footer(app: &App, top: usize, height: usize, pinned: bool) -> String {
+fn footer(app: &App, top: usize, height: usize, pinned: bool, width: u16) -> String {
     let total = app.logs.len();
     let last = (top + height).min(total);
     let position = if pinned {
@@ -98,7 +98,14 @@ fn footer(app: &App, top: usize, height: usize, pinned: bool) -> String {
         format!("{total} lines · newest")
     };
 
-    format!("  {position}   {}", keys::screen_hint(Screen::Logs))
+    // The position is the load-bearing half of this line, so it is what
+    // the hints have to fit around rather than the other way about.
+    let hint = keys::screen_hint_within(
+        Screen::Logs,
+        components::hint_width(width, false, position.chars().count() + 3),
+    );
+
+    format!("  {position}   {hint}")
 }
 
 #[cfg(test)]

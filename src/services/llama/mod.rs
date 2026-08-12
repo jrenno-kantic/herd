@@ -19,6 +19,7 @@ pub mod hub;
 pub mod ini;
 pub mod memory;
 pub mod overrides;
+pub mod prefs;
 pub mod process;
 pub mod session;
 

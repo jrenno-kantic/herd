@@ -47,7 +47,11 @@ pub fn render(frame: &mut Frame, app: &App, area: Rect) {
         .to_vec();
 
     frame.render_widget(
-        Paragraph::new(format!("  {}", footer(app))).style(Theme::logs()),
+        Paragraph::new(format!(
+            "  {}",
+            footer(app, components::hint_width(chunks[1].width, false, 0))
+        ))
+        .style(Theme::logs()),
         chunks[1],
     );
 
@@ -139,7 +143,7 @@ fn toggle_state(value: &str) -> Option<bool> {
 /// Names what Enter will do to the row under the cursor. The Settings
 /// screen is the one place where that key has two behaviours, so it says
 /// which one is armed rather than leaving the user to press it and see.
-fn footer(app: &App) -> String {
+fn footer(app: &App, width: usize) -> String {
     let toggles = app
         .llama
         .selected_setting()
@@ -149,21 +153,27 @@ fn footer(app: &App) -> String {
         })
         .is_some();
 
-    let hint = keys::screen_hint(Screen::Settings);
+    // The "enter flips this one" note is part of the line, so the hints
+    // are fitted to what is left after it rather than to the whole pane.
+    const NOTE: &str = "   (enter flips this one)";
+    let taken = if toggles { NOTE.len() } else { 0 };
+
+    let hint = keys::screen_hint_within(Screen::Settings, width.saturating_sub(taken));
     if toggles {
-        format!("{hint}   (enter flips this one)")
+        format!("{hint}{NOTE}")
     } else {
         hint
     }
 }
 
-/// The session-only caveat lives in the title rather than the footer: it
-/// is the standing fact about this screen, and it no longer competes with
-/// the key hints for the one line at the bottom.
+/// Where an edit ends up is the standing fact about this screen, so it
+/// lives in the title rather than competing with the key hints for the
+/// one line at the bottom. Overrides are remembered — in a file herd owns
+/// — and the hand-written `models.ini` is still never touched.
 fn block() -> Block<'static> {
     Block::default()
         .title(Span::styled(
-            " Settings · session-only, models.ini is never written ",
+            " Settings · kept in ~/.herd_config, models.ini is never written ",
             Theme::normal(),
         ))
         .borders(Borders::ALL)

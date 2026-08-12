@@ -7,7 +7,7 @@
 
 use crate::{
     app::{App, Mode, Screen},
-    keys,
+    components, keys,
     services::llama::api::ChatOutcome,
     theme::Theme,
 };
@@ -22,11 +22,11 @@ pub fn render(frame: &mut Frame, app: &App, area: Rect) {
         .constraints([Constraint::Length(8), Constraint::Min(3)])
         .split(area);
 
-    frame.render_widget(request(app), chunks[0]);
+    frame.render_widget(request(app, chunks[0].width), chunks[0]);
     frame.render_widget(response(app), chunks[1]);
 }
 
-fn request(app: &App) -> Paragraph<'static> {
+fn request(app: &App, width: u16) -> Paragraph<'static> {
     let target = app
         .llama
         .test_target()
@@ -48,7 +48,10 @@ fn request(app: &App) -> Paragraph<'static> {
             Theme::status_starting(),
         ),
         None => Span::styled(
-            format!("  {}", keys::screen_hint(Screen::Test)),
+            format!(
+                "  {}",
+                keys::screen_hint_within(Screen::Test, components::hint_width(width, true, 0))
+            ),
             Theme::logs(),
         ),
     };

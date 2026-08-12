@@ -14,6 +14,7 @@ use app::{Action, App};
 use engine::Executor;
 use event::EventStream;
 use services::llama;
+use services::llama::prefs::Prefs;
 use services::llama::session::Session;
 use std::path::PathBuf;
 use tokio::sync::mpsc;
@@ -67,7 +68,12 @@ async fn main() -> Result<()> {
         _ => llama::resolve_config_path(cli_config.as_deref()),
     };
 
-    let mut app = App::restored(config_path.clone(), session.model.clone());
+    // Favourites, setting overrides and the router numbers. Missing or
+    // corrupt reads as "no preferences yet" — never as a reason not to
+    // start.
+    let prefs = Prefs::load();
+
+    let mut app = App::restored(config_path.clone(), session.model.clone(), prefs);
     let mut terminal = tui::TerminalSession::enter()?;
     let (event_tx, mut event_rx) = mpsc::unbounded_channel();
 
@@ -115,6 +121,7 @@ async fn main() -> Result<()> {
                 Action::RunCommand(command) => executor.run_command(command),
                 Action::ConfigPathChanged(path) => executor.set_config_path(path),
                 Action::RunChat { model, prompt } => executor.run_chat(model, prompt),
+                Action::CopyToClipboard { label, text } => executor.copy(label, text),
                 Action::Download {
                     model,
                     repo,
@@ -145,14 +152,25 @@ async fn main() -> Result<()> {
     // after herd exits.
     executor.shutdown().await;
 
-    // Only the tier and the last preset — settings overrides are
-    // session-only by design and never reach the disk. Written here rather
-    // than inside `App::update`, which stays pure and testable.
+    // Only the tier and the last preset — everything the user *chose*
+    // goes to `~/.herd_config` instead. Written here rather than inside
+    // `App::update`, which stays pure and testable.
     Session {
         config_path: Some(app.llama.config_path.clone()),
         model: app.llama.last_launched.clone(),
     }
     .save();
+
+    // Leave the alternate screen before saying anything: a message
+    // written under it is painted over by the restore and never seen.
+    drop(terminal);
+
+    // Unlike the session file, a failed preferences save is reported.
+    // Losing which tier you were on is an inconvenience; losing the
+    // overrides and favourites you set on purpose is work.
+    if let Err(error) = app.prefs().save() {
+        eprintln!("herd: could not save preferences — {error}");
+    }
 
     Ok(())
 }

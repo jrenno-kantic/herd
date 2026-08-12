@@ -1,8 +1,10 @@
 //! Remembers the last tier and model across restarts.
 //!
 //! Deliberately minimal: **only** the active config path and the last
-//! launched preset name. Settings overrides are session-only by design
-//! (see `overrides.rs`) and must never end up in here.
+//! launched preset name. Everything the user *chose* — favourites,
+//! setting overrides, the router numbers — belongs in `~/.herd_config`
+//! (see `prefs.rs`) and must never end up in here: this file is where the
+//! program was, not what the user asked for.
 //!
 //! Every failure is silent — a missing, unreadable or corrupt session file
 //! just means "no memory yet". Losing a convenience must never block start-up.

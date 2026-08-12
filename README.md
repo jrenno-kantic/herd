@@ -8,28 +8,29 @@ It is a Rust port and expansion of the `llama-launch.js` idea: that script resol
 
 | | Screen | What it does |
 |---|---|---|
-| `1` | **Models** | The presets in the active `models.ini`, with repo, context size, memory estimate, optimisations, capabilities, speculative head and whether the weights are on this machine. Launch with `Enter`, download with `d`. The active preset is marked `●` serving, `◐` starting or stopping, `✖` failed. |
+| `1` | **Models** | The presets in the active `models.ini`, with repo, context size, memory estimate, optimisations, capabilities, speculative head and whether the weights are on this machine. Launch with `Enter`, download with `d`, star with `f`, copy the launch command with `y`. The active preset is marked `●` serving, `◐` starting or stopping, `✖` failed. |
 | `2` | **Server** | Lifecycle state, model, endpoint, uptime, and the tail of the process output. |
-| `3` | **Test** | Send a chat completion to the running model and see the reply, when it was sent, the latency, token rate, and llama.cpp's own split of prompt-eval vs generation. |
-| `4` | **Stats** | Session counters — start time, uptime, tokens in/out, throughput — and the memory budget. |
-| `5` | **Settings** | Every `[server]`, `[*]` and per-model key, editable for the session. |
-| `6` | **Logs** | Full log history, scrollable, with a position indicator and a scrollbar. |
+| `3` | **Router** | llama-server's built-in multi-model mode: how many models stay resident, how long an idle one survives, and the argv that starts it. |
+| `4` | **Test** | Send a chat completion to the running model and see the reply, when it was sent, the latency, token rate, and llama.cpp's own split of prompt-eval vs generation. |
+| `5` | **Stats** | Session counters — start time, uptime, tokens in/out, throughput — and the memory budget. |
+| `6` | **Settings** | Every `[server]`, `[*]` and per-model key, overridable — kept in `~/.herd_config`. |
+| `7` | **Logs** | Full log history, scrollable, with a position indicator and a scrollbar. |
 
 ```
-┌HERD 0.1.0────────────┐┌ Models · 32gb · ~/models/32gb/models.ini ─────────── 1/8 ┐
-│ ▸ 1 Models           ││  NAME            REPO              RAM     OPT CAPS SPEC   LOCAL│
-│   2 Server           ││▸●gemma4-12b      unsloth/gemma-4…  7.7G  qat ud    S  mtp        │
-│   3 Test             ││  gemma4-31b      unsloth/gemma-4… 18.3G  qat ud    S  mtp not local│
-│   4 Stats            ││  qwen3-coder     unsloth/Qwen3-C… 17.8G  ud moe    C    -        │
-│   5 Settings         ││                                                                  │
-│   6 Logs             ││  RAM 36 GiB · quantisation-aware training · speculative (mtp)    │
-│ tier  32gb           ││  j/↓ move · enter launch · s stop · d download · / filter        │
-│ RAM   36 GiB         │└──────────────────────────────────────────────────────────────────┘
-│                      │┌ argv preview ────────────────────────────────────────────────────┐
-│                      ││llama-server \                                                    │
-│                      ││  --host 0.0.0.0 --port 1234 --jinja --ctx-size 32768 \            │
-│                      ││  --gpu-layers 99 --hf-repo unsloth/gemma-4-12B-it-qat-GGUF…       │
-└──────────────────────┘└──────────────────────────────────────────────────────────────────┘
+┌HERD 0.2.1────────────┐┌ Models · 32gb · ~/models/32gb/models.ini ────────────────────── 1/8 ┐
+│ ▸ 1 Models           ││   NAME            REPO              RAM     OPT CAPS SPEC   LOCAL   │
+│   2 Server           ││▸★●gemma4-12b      unsloth/gemma-4…  7.7G  qat ud    S  mtp          │
+│   3 Router           ││  ★gemma4-31b      unsloth/gemma-4… 18.3G  qat ud    S  mtp not local│
+│   4 Test             ││   qwen3-coder     unsloth/Qwen3-C… 17.8G  ud moe    C    -          │
+│   5 Stats            ││                                                                     │
+│   6 Settings         ││  RAM 36 GiB · quantisation-aware training · speculative (mtp)       │
+│   7 Logs             ││  j/↓ move · enter launch · s stop · d download · / filter · …      │
+│                      │└─────────────────────────────────────────────────────────────────────┘
+│ tier  32gb           │┌ argv preview ─────────────────────────────────────────────── y copy ┐
+│ RAM   36 GiB         ││llama-server \                                                       │
+│                      ││  --host 0.0.0.0 --port 1234 --jinja --ctx-size 32768 \              │
+│                      ││  --gpu-layers 99 --hf-repo unsloth/gemma-4-12B-it-qat-GGUF…         │
+└──────────────────────┘└─────────────────────────────────────────────────────────────────────┘
  SERVING  gemma4-12b · up 04:12 · http://127.0.0.1:1234 · tab screen · : command · q quit
 ```
 
@@ -38,6 +39,23 @@ load-bearing columns are dropped in order — context size, then optimisations,
 then capabilities, then the speculative head — rather than being clipped off the
 right edge where you cannot tell an empty column from a cut-off one. The preset
 name and `LOCAL` are never dropped.
+
+The **key hints do the same thing**. A footer too long for its pane does not
+wrap — its last hints simply disappear off the right edge — so hints are dropped
+from the end, least useful first, and the line ends in `…` to say that some
+were. `?` always has all of them.
+
+**`f` stars a preset**, `★` in gold. Starring never reorders the table: a list
+you navigate by position must not rearrange itself because you starred something
+above. Stars are kept in `~/.herd_config`.
+
+**`y` copies that argv as a shell command**, quoted onto one line so it can be
+pasted straight into a terminal, a script or a bug report — the same argv HERD
+would spawn, session overrides included, rather than a re-typing of the pane.
+Alt-screen text does not select cleanly with the mouse, so a preview you can
+only read is half an answer to "what would this actually run?". The log line
+appears once the clipboard has actually taken it; if no clipboard tool answered
+(`pbcopy` on macOS, `wl-copy`/`xclip`/`xsel` elsewhere) it says that instead.
 
 ## Run
 
@@ -58,7 +76,7 @@ Global:
 
 | Key | Action |
 |-----|--------|
-| `1`–`6` | jump to a screen |
+| `1`–`7` | jump to a screen |
 | `c` | choose which `models.ini` to use |
 | `Tab` / `Shift-Tab`, or `→` / `←` | cycle screens |
 | `:` | command bar (power-user escape hatch) |
@@ -75,11 +93,17 @@ Models screen:
 | `g`/`Home`, `G`/`End` | jump to the first / last row |
 | `Enter` | launch the highlighted preset |
 | `d` | download it without launching |
+| `f` | star it, or take the star off |
+| `y` | copy the launch command to the clipboard, quoted and ready to paste |
 | `s` | stop the running server, or clear a failed launch |
 | `/` | filter by name or repo (`Enter` keeps it, `Esc` clears it) |
 | `t` / `T` | next / previous RAM tier |
 | `c` | open the config picker |
 | `r` | reload `models.ini` from disk |
+
+Router screen: `j`/`k` move between the two settings, `+`/`-` adjust them,
+`Enter` starts the router with what is on screen, `s` stops it, `r` resets both
+to their defaults, `y` copies the command. See [Router mode](#router-mode).
 
 Server screen: `s` stop, `p` ping, `Enter` launch the selected preset — refused
 when that preset is the one already serving, since relaunching it is a stop and
@@ -305,12 +329,17 @@ Quitting always stops the supervised process, so no orphaned server keeps holdin
 
 ## Settings and overrides
 
-Edits made on the Settings screen apply to the next launch and are **discarded on quit**. `models.ini` is never written to: those files are hand-maintained and heavily commented, and no ini round-tripper preserves comment placement reliably.
+Edits made on the Settings screen apply to the next launch and are **remembered
+in `~/.herd_config`**, so a preset tuned once stays tuned. `models.ini` is still
+never written to: those files are hand-maintained and heavily commented, and no
+ini round-tripper preserves comment placement reliably. That rule was always
+about the ini, not about forgetting — so the overrides live in a file HERD owns,
+and the ini stays the untouched thing they are shown against.
 
 An override is exactly a CLI override, so it slots into the precedence chain you already know:
 
 ```
-[server] → [*] → [model] → session overrides → explicit CLI args
+[server] → [*] → [model] → your overrides → explicit CLI args
 ```
 
 Overridden keys are marked `*` on the Settings screen and shown next to the value they replaced. Retyping the original value clears the override rather than pinning an identical one.
@@ -327,7 +356,29 @@ The preset file is resolved once at startup, in this order:
 
 Options 1 and 2 are taken at face value: a path that does not exist is reported as a plain `cannot read ...` error rather than being silently swapped for another file.
 
-The last tier and the last launched preset are remembered in `~/.config/herd/session.json` so a restart lands where you left off. Nothing else is persisted.
+The last tier and the last launched preset are remembered in `~/.config/herd/session.json` so a restart lands where you left off — where the program *was*.
+
+What you *chose* goes to `~/.herd_config`: starred presets, setting overrides,
+and the router's two numbers. It is pretty-printed JSON with sorted keys,
+sitting in `$HOME` rather than in a nested application directory, and is meant
+to be read and edited by hand:
+
+```json
+{
+  "favorites": ["gemma4-12b", "qwen3-coder"],
+  "overrides": {
+    "global": {},
+    "per_model": { "gemma4-12b": { "ctx-size": "65536" } }
+  },
+  "router": { "models_max": 2, "sleep_idle_seconds": 300 }
+}
+```
+
+Favourites and overrides are keyed by preset name rather than by tier, since
+`gemma4-12b` appears in both shipped tiers and is the same model. A missing or
+corrupt file reads as "no preferences yet" and never stops HERD from starting; a
+save that fails says so on stderr, because losing something you set on purpose
+is not the same as forgetting which tier you were on.
 
 ### `data/`
 
@@ -356,13 +407,50 @@ Tiers commonly share a port, so launching from one while another is serving woul
 ```
 ┌ Port in use ─────────────────────────────────────────────┐
 │  Port 1234 is already in use.                            │
-│  herd did not start that process and will not stop it.│
+│  herd did not start that process and will not stop it.   │
 │                                                          │
 │  Launch 'gemma4-12b' anyway?  [y] yes  [any key] cancel  │
 └──────────────────────────────────────────────────────────┘
 ```
 
 It never kills a process it did not spawn. When the process on that port *is* herd's own, launching hot-swaps it cleanly with no prompt.
+
+## Router mode
+
+The Models screen supervises one preset at a time. **Router mode is the other
+trade**: one long-lived `llama-server` pointed at the whole `models.ini`, loading
+and unloading presets on demand. Screen `3` is where its two numbers live —
+until now they were flags on a `:router` command line, where nobody could see
+them.
+
+```
+┌ Router · 32gb ──────────────────────────────────────────────────── 1/2 ┐
+│  state     not running                                                 │
+│  presets   ~/models/32gb/models.ini                                    │
+│  endpoint  -                                                           │
+│                                                                        │
+│▸ models-max                2   models kept resident before one is unloaded
+│  sleep-idle-seconds     300s   idle time before a model is unloaded    │
+│                                                                        │
+│  j/↓ move · +/- adjust · enter start · s stop · r reset                │
+└────────────────────────────────────────────────────────────────────────┘
+┌ argv preview ─────────────────────────────────────────────── y copy ┐
+│llama-server \                                                       │
+│  --host 0.0.0.0 --port 1234 --jinja --models-preset ~/models/32gb/… │
+│  --models-max 2 --sleep-idle-seconds 300                            │
+└─────────────────────────────────────────────────────────────────────┘
+```
+
+`Enter` starts it with exactly what is on screen; the argv preview below is the
+same live view the Models screen carries, because the two numbers only mean
+anything as the flags they become. Both are remembered in `~/.herd_config`.
+
+The state line reports the supervised process **only when it is the router**. A
+single preset serving from the Models screen is not this screen's business, and
+showing SERVING for it would claim the router was up when it is not.
+
+`[server]` is shared: the router binds the same host and port your presets do,
+so it and a manually launched preset cannot run at once.
 
 ## Commands
 

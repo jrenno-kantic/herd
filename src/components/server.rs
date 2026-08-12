@@ -3,7 +3,7 @@
 
 use crate::{
     app::{App, Screen},
-    keys,
+    components, keys,
     services::llama::ServerState,
     theme::Theme,
 };
@@ -20,11 +20,11 @@ pub fn render(frame: &mut Frame, app: &App, area: Rect) {
         .constraints([Constraint::Length(10), Constraint::Min(3)])
         .split(area);
 
-    frame.render_widget(summary(app), chunks[0]);
+    frame.render_widget(summary(app, chunks[0].width), chunks[0]);
     frame.render_widget(tail(app), chunks[1]);
 }
 
-fn summary(app: &App) -> Paragraph<'static> {
+fn summary(app: &App, width: u16) -> Paragraph<'static> {
     let server = &app.llama.server;
     let mut state_line = vec![
         Span::styled("  state     ", Theme::logs()),
@@ -58,7 +58,10 @@ fn summary(app: &App) -> Paragraph<'static> {
 
     lines.push(Line::from(""));
     lines.push(Line::styled(
-        format!("  {}", keys::screen_hint(Screen::Server)),
+        format!(
+            "  {}",
+            keys::screen_hint_within(Screen::Server, components::hint_width(width, true, 0))
+        ),
         Theme::logs(),
     ));
 

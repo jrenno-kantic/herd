@@ -3,7 +3,7 @@
 
 use crate::{
     app::{App, Screen},
-    keys,
+    components, keys,
     services::llama::memory,
     theme::Theme,
 };
@@ -19,7 +19,7 @@ pub fn render(frame: &mut Frame, app: &App, area: Rect) {
         .split(area);
 
     frame.render_widget(session(app), chunks[0]);
-    frame.render_widget(memory_budget(app), chunks[1]);
+    frame.render_widget(memory_budget(app, chunks[1].width), chunks[1]);
 }
 
 fn session(app: &App) -> Paragraph<'static> {
@@ -73,7 +73,7 @@ fn throughput(app: &App) -> String {
     }
 }
 
-fn memory_budget(app: &App) -> Paragraph<'static> {
+fn memory_budget(app: &App, width: u16) -> Paragraph<'static> {
     let budget = app.llama.budget();
     let risky = budget.is_risky();
 
@@ -132,7 +132,10 @@ fn memory_budget(app: &App) -> Paragraph<'static> {
     ));
     lines.push(Line::from(""));
     lines.push(Line::styled(
-        format!("  {}", keys::screen_hint(Screen::Stats)),
+        format!(
+            "  {}",
+            keys::screen_hint_within(Screen::Stats, components::hint_width(width, true, 0))
+        ),
         Theme::logs(),
     ));
 

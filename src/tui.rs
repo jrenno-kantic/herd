@@ -1,8 +1,8 @@
 use crate::{
     app::{App, Mode, Screen},
     components::{
-        command_bar, confirm, help, logs, models, picker, server, settings, sidebar, stats, status,
-        test,
+        command_bar, confirm, help, logs, models, picker, router, server, settings, sidebar, stats,
+        status, test,
     },
     layout,
     theme::Theme,
@@ -52,6 +52,7 @@ pub fn render(frame: &mut Frame, app: &App) {
     match app.screen {
         Screen::Models => models::render(frame, app, areas.main),
         Screen::Server => server::render(frame, app, areas.main),
+        Screen::Router => router::render(frame, app, areas.main),
         Screen::Test => test::render(frame, app, areas.main),
         Screen::Stats => stats::render(frame, app, areas.main),
         Screen::Settings => settings::render(frame, app, areas.main),
@@ -153,6 +154,72 @@ spec-type = draft-mtp
         assert!(text.contains("unsloth/gemma-4-12B"), "repo column missing");
         assert!(text.contains("32768"), "inherited ctx-size missing");
         assert!(text.contains("llama-server"), "argv preview missing");
+    }
+
+    /// The copy key does not fit in the Models footer, so the preview
+    /// border is the only place it is advertised. A feature nobody can
+    /// find is not a feature — and this is also what pins the hint to the
+    /// pane it acts on, at the narrow width where the footer gave up.
+    #[test]
+    fn the_argv_preview_says_how_to_copy_it() {
+        let app = sample_app();
+
+        for width in [100, 120] {
+            let text = frame_text(&app, width, 40);
+            assert!(
+                text.contains("y copy"),
+                "no copy hint on the argv preview at {width} columns"
+            );
+        }
+    }
+
+    #[test]
+    fn a_starred_preset_is_drawn_with_its_star() {
+        let mut app = sample_app();
+        assert!(!frame_text(&app, 120, 40).contains('★'), "star before any");
+
+        app.update(crate::event::UiEvent::Key(crossterm::event::KeyEvent::new(
+            crossterm::event::KeyCode::Char('f'),
+            crossterm::event::KeyModifiers::NONE,
+        )));
+
+        let text = frame_text(&app, 120, 40);
+        assert!(text.contains('★'), "no star on the starred row:\n{text}");
+    }
+
+    /// The Router screen has to say what it would start and what it would
+    /// start it with — the two numbers were flags nobody could see when
+    /// `:router` was the only way in.
+    #[test]
+    fn the_router_screen_shows_its_settings_and_the_argv() {
+        let mut app = sample_app();
+        app.screen = Screen::Router;
+
+        let text = frame_text(&app, 120, 40);
+        assert!(text.contains("models-max"), "{text}");
+        assert!(text.contains("sleep-idle-seconds"), "{text}");
+        assert!(text.contains("--models-preset"), "no argv preview:\n{text}");
+        assert!(text.contains("not running"), "no state line:\n{text}");
+    }
+
+    /// Prints the Models and Router screens at two widths, because
+    /// arithmetic saying it fits is not the same as looking at it.
+    #[test]
+    #[ignore = "prints the new screens for inspection"]
+    fn show_the_new_screens() {
+        let mut app = App::with_config_path(shipped("32gb"));
+        app.llama.favorites.insert("gemma4-12b".into());
+        app.update(crate::event::UiEvent::Resize { height: 32 });
+
+        for width in [100, 120] {
+            for screen in [Screen::Models, Screen::Router] {
+                app.screen = screen;
+                println!(
+                    "\n=== {screen:?} at {width} ===\n{}",
+                    frame_text(&app, width, 32)
+                );
+            }
+        }
     }
 
     /// The one assertion that keeps `app::chrome` honest.

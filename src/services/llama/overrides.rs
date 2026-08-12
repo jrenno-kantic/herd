@@ -1,9 +1,12 @@
-//! Session-only overrides for `[server]` / `[*]` / per-model options.
+//! Overrides for `[server]` / `[*]` / per-model options.
 //!
-//! Deliberately **never written to disk**: `models.ini` is hand-maintained
-//! and heavily commented, and no ini round-tripper preserves comment
-//! placement reliably. Edits live for the lifetime of the process and are
-//! discarded on quit.
+//! **Never written back into `models.ini`**, which is hand-maintained and
+//! heavily commented and which no ini round-tripper preserves faithfully.
+//! That constraint is about the *ini*, not about persistence: overrides
+//! are now remembered in `~/.herd_config` (see `services/prefs.rs`), a
+//! file herd owns outright, so a preset tuned once stays tuned. The ini
+//! remains the user's, untouched, and stays the thing the Settings screen
+//! shows the override *against*.
 //!
 //! They need no new precedence rule either. An override is exactly a CLI
 //! override — "last write wins, keep original position" — so it is emitted
@@ -14,6 +17,7 @@
 //! [server] -> [*] -> [model] -> overrides -> explicit CLI args
 //! ```
 
+use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 
 /// Which layer an edited key belongs to. Global edits apply to every
@@ -26,9 +30,14 @@ pub enum Scope {
     Model,
 }
 
-#[derive(Debug, Clone, Default)]
+/// `BTreeMap` rather than a hash map so the on-disk file has a stable key
+/// order: a preferences file that reshuffles itself on every write is
+/// unreadable in a diff, and this one is meant to be readable by hand.
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
 pub struct Overrides {
+    #[serde(default)]
     global: BTreeMap<String, String>,
+    #[serde(default)]
     per_model: BTreeMap<String, BTreeMap<String, String>>,
 }
 

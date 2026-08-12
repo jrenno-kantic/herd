@@ -44,6 +44,15 @@ impl Theme {
             .add_modifier(Modifier::BOLD)
     }
 
+    /// The favourite star. Gold, and bold so it still reads on a terminal
+    /// whose yellow is washed out.
+    pub fn favorite() -> Style {
+        Style::default()
+            .fg(Color::Yellow)
+            .bg(Color::Black)
+            .add_modifier(Modifier::BOLD)
+    }
+
     pub fn status_error() -> Style {
         Style::default()
             .fg(Color::Red)

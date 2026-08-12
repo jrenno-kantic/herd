@@ -4,6 +4,7 @@ pub mod help;
 pub mod logs;
 pub mod models;
 pub mod picker;
+pub mod router;
 pub mod server;
 pub mod settings;
 pub mod sidebar;
@@ -12,6 +13,21 @@ pub mod status;
 pub mod test;
 
 use ratatui::layout::Rect;
+
+/// Every screen indents its footer by two spaces.
+const INDENT: usize = 2;
+
+/// How much room a footer really has inside a pane `pane_width` wide,
+/// once the pane's borders, the standard indent and anything already on
+/// the line are taken.
+///
+/// Passed to `keys::screen_hint_within` so hints are dropped deliberately
+/// — with a marker saying so — rather than sliding off the right edge,
+/// where a key that exists looks exactly like one that does not.
+pub fn hint_width(pane_width: u16, bordered: bool, taken: usize) -> usize {
+    let borders = if bordered { 2 } else { 0 };
+    (pane_width as usize).saturating_sub(borders + INDENT + taken)
+}
 
 /// Centres a `width` x `height` box inside `area`, clamped so it always
 /// fits even in a very small terminal. Shared by every modal.
