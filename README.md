@@ -547,7 +547,13 @@ The `:` bar remains available for anything faster to type than to navigate:
 - `stop`, `status`, `ping <model>`
 - `cache` -> ask llama.cpp again what it has, after a download or a deletion made outside HERD (also `r` on the Hub screen)
 - `help` -> the list below, as an overlay
-- `test`, `scan`, `sh <command>`
+- `sh <command>` -> run a shell command without leaving the alternate screen
+
+`test` and `scan` were removed in 0.7.1. They were pre-pivot scaffolding that
+answered fixed strings — `scan` never looked at a network — and a listing that
+promises a scanner there is no scanner for is the same dishonesty the columns
+and the key hints are designed to avoid. `:test` also collided with the Test
+screen, which is a different thing entirely.
 
 **`:help` lists them all**, grouped, with their arguments — the counterpart to
 `?` for keys:

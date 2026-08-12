@@ -14,8 +14,10 @@ Filiation : `llama-launch.js` résout la précédence ini et **imprime** un argv
 herd résout la même précédence, affiche l'argv en direct, puis lance et
 supervise réellement le processus.
 
-Le runner générique d'origine (`help`, `test`, `scan`, `sh`) subsiste en
-dessous, mais ce n'est plus le sujet.
+Le runner générique d'origine subsiste en dessous, réduit à `help` et `sh` :
+`test` et `scan` répondaient des chaînes fixes — `scan` n'a jamais regardé le
+réseau — et un `:help` qui les annonce transforme un vestige inoffensif en
+promesse fausse.
 
 ## Les huit écrans
 

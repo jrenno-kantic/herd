@@ -70,14 +70,17 @@ a missing `xclip` is discovered at the paste, which is too late.
 
 ## Script Service
 
-Runs the handful of generic commands (`test`, `scan`, `sh`). The command
-*catalogue* moved to `commands.rs`, which is now the only place a command is
-written down — the copy that lived here had drifted from the dispatchers.
+Runs what is left of the generic path: `sh`, and `help` as a fallback. The
+command *catalogue* moved to `commands.rs`, which is now the only place a
+command is written down — the copy that lived here had drifted from the
+dispatchers.
+
+`test` and `scan` were removed once `:help` started advertising them: both
+answered fixed strings, and `scan` never looked at a network. A stub is
+harmless until something promises it.
 
 ## System Service
 
-Executes shell commands via `sh <command>`, bounded by a 30s timeout.
-
-## Network Service
-
-Stub. `scan_devices` sleeps and returns "No devices discovered".
+Executes shell commands via `sh <command>`, bounded by a 30s timeout. The one
+piece of the original generic runner that does what it claims, and the reason
+it was kept.

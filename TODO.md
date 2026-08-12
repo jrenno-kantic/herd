@@ -358,6 +358,25 @@
 - [x] set version to 0.7.0 → from 0.5.0, carrying the Hub screen, measured
       sizes, TTFT, the list scrollbar and `:help`.
 
+- [x] are `:sh`, `:test` and `:scan` still required? → **`test` and `scan`
+      are gone; `sh` stays.** Both removed answered fixed strings:
+      `test` returned "Test executed", and `scan` returned "No devices
+      discovered" after a 500 ms sleep, having never looked at a network.
+    - They were harmless as pre-pivot vestiges right up until `:help`
+      started advertising them. A listing that promises a network scanner
+      there is no scanner for is the same dishonesty `Columns::for_width`
+      and `screen_hint_within` exist to prevent — and `:test` collided
+      with the Test screen, which is a different thing entirely.
+    - `sh <command>` is the one that does what it claims: a real
+      `sh -c` bounded at 30s, and `:sh ls ~/models` without leaving the
+      alternate screen is a genuine use.
+    - `services/network.rs` deleted with `scan` — it existed only for it.
+      The plugins spec still lists a network scanner as *intent*, which is
+      honest in a file that says "not implemented" at the top.
+    - A test now pins that both retired names answer "Unknown command":
+      a command that is no longer listed and still runs is the same drift
+      `commands.rs` prevents, pointing the other way.
+
 - [x] ensure doc and specs are up to date → `herd-spec-kit/` was two
       releases stale: it still listed six screens and no Router. Product,
       UX, architecture, data-model, services, roadmap, layout, theme and

@@ -60,7 +60,7 @@ stays pure.
   fetching what is not), `caps` (what a preset is optimised for and what it can
   do)
 - `services/` : clipboard (a platform command, not a crate), scripts, system
-  (shell), network
+  (shell)
 - `components/` : read-only renderers over `App` — one per screen
   (`models`, `hub`, `server`, `router`, `test`, `stats`, `settings`, `logs`),
   plus `sidebar`, `command_bar`, `status`, and the `confirm` / `picker` /

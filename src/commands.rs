@@ -183,22 +183,6 @@ pub const ALL: &[Command] = &[
         Handler::Script,
         "sh true",
     ),
-    command(
-        "test",
-        "test",
-        "the built-in sample script",
-        Group::Other,
-        Handler::Script,
-        "test",
-    ),
-    command(
-        "scan",
-        "scan",
-        "scan the network for devices",
-        Group::Other,
-        Handler::Script,
-        "scan",
-    ),
 ];
 
 /// Everything worth showing a user, in table order.
