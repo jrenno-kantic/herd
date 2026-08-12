@@ -9,24 +9,29 @@ It is a Rust port and expansion of the `llama-launch.js` idea: that script resol
 | | Screen | What it does |
 |---|---|---|
 | `1` | **Models** | The presets in the active `models.ini`, with repo, context size, memory size, optimisations, capabilities, speculative head and whether the weights are on this machine. Launch with `Enter`, download with `d`, star with `f`, copy the launch command with `y`. The active preset is marked `●` serving, `◐` starting or stopping, `✖` failed. |
-| `2` | **Hub** | What llama.cpp actually has in its cache: every model, its size, what its repo costs on disk, and which preset in this tier uses it. Models no preset names are in **cyan**; `y` copies a `models.ini` stanza for one. |
-| `3` | **Server** | Lifecycle state, model, endpoint, uptime, and the tail of the process output. |
-| `4` | **Router** | llama-server's built-in multi-model mode: how many models stay resident, how long an idle one survives, and the argv that starts it. |
-| `5` | **Test** | Send a chat completion to the running model and see the reply, when it was sent, the latency, token rate, and llama.cpp's own split of prompt-eval vs generation. |
-| `6` | **Stats** | Session counters — start time, uptime, tokens in/out, throughput, time to first token — and the memory budget. |
-| `7` | **Settings** | Every `[server]`, `[*]` and per-model key, overridable — kept in `~/.herd_config`. |
-| `8` | **Logs** | Full log history, scrollable, with a position indicator and a scrollbar. |
+| `2` | **Server** | Lifecycle state, model, endpoint, uptime, and the tail of the process output. |
+| `3` | **Router** | llama-server's built-in multi-model mode: how many models stay resident, how long an idle one survives, and the argv that starts it. |
+| `4` | **Test** | Send a chat completion to the running model and see the reply, when it was sent, the latency, token rate, and llama.cpp's own split of prompt-eval vs generation. |
+| `5` | **Stats** | Session counters — start time, uptime, tokens in/out, throughput, time to first token — and the memory budget. |
+| `6` | **Settings** | Every `[server]`, `[*]` and per-model key, overridable — kept in `~/.herd_config`. |
+| `7` | **Logs** | Full log history, scrollable, with a position indicator and a scrollbar. |
+| `8` | **Hub** | What llama.cpp actually has in its cache: every model, its size, what its repo costs on disk, and which preset in this tier uses it. Models no preset names are in **cyan**; `y` copies a `models.ini` stanza for one. |
+
+The first seven are the ones a session moves through — browse, launch, watch,
+probe. **Hub sits last** because it is where you go occasionally, to see what
+the cache is holding; menu order follows how often a screen is wanted, not how
+closely it relates to its neighbour.
 
 ```
-┌HERD 0.5.0────────────┐┌ Models · 32gb · ~/models/32gb/models.ini ────────────────────── 1/8 ┐
+┌HERD 0.7.1────────────┐┌ Models · 32gb · ~/models/32gb/models.ini ────────────────────── 1/8 ┐
 │ ▸ 1 Models           ││   NAME            REPO              RAM     OPT CAPS SPEC   LOCAL   │
-│   2 Hub              ││▸★●gemma4-12b      unsloth/gemma-4…  7.3G  qat ud    S  mtp         █│
-│   3 Server           ││  ★gemma4-31b      unsloth/gemma-4…~18.3G  qat ud    S  mtp not local│
-│   4 Router           ││   qwen3-coder     unsloth/Qwen3-C… 17.5G  ud moe    C    -          │
-│   5 Test             ││                                                                     │
-│   6 Stats            ││  RAM 36 GiB · quantisation-aware training · speculative (mtp)       │
-│   7 Settings         ││  j/↓ move · enter launch · s stop · d download · / filter · …       │
-│   8 Logs             │└─────────────────────────────────────────────────────────────────────┘
+│   2 Server           ││▸★●gemma4-12b      unsloth/gemma-4…  7.3G  qat ud    S  mtp         █│
+│   3 Router           ││  ★gemma4-31b      unsloth/gemma-4…~18.3G  qat ud    S  mtp not local│
+│   4 Test             ││   qwen3-coder     unsloth/Qwen3-C… 17.5G  ud moe    C    -          │
+│   5 Stats            ││                                                                     │
+│   6 Settings         ││  RAM 36 GiB · quantisation-aware training · speculative (mtp)       │
+│   7 Logs             ││  j/↓ move · enter launch · s stop · d download · / filter · …       │
+│   8 Hub              │└─────────────────────────────────────────────────────────────────────┘
 │ tier  32gb           │┌ argv preview ─────────────────────────────────────────────── y copy ┐
 │ RAM   36 GiB         ││llama-server \                                                       │
 │                      ││  --host 0.0.0.0 --port 1234 --jinja --ctx-size 32768 \              │
@@ -316,7 +321,7 @@ Counters for the current serving session, reset on every launch so they describe
 │  tokens in   48                                            │
 │  tokens out  200                                           │
 │  throughput  50.0 tok/s avg  ·  51.0 last  ·  51.0 best    │
-│  first token 0.42s avg  ·  0.39s last  ·  0.31s best       │
+│  first token 4.20s  (first call after loading)             │
 └────────────────────────────────────────────────────────────┘
 ```
 
@@ -328,8 +333,14 @@ Test screen.
 **Time to first token** is the other half of "is this model fast", and the two
 come apart exactly where it matters: a model paging its weights in can generate
 at a perfectly respectable rate and still leave you looking at nothing for four
-seconds, which throughput alone reports as a healthy session. `best` here is the
-*shortest*, unlike the best rate.
+seconds, which throughput alone reports as a healthy session.
+
+It is taken from the **first probe after the model loaded, and no other** —
+that being the only request that measures a cold model. Everything after it is
+answered from resident weights and a warm cache, so keeping a running average
+would drag the figure towards the warm one the more probes you ran, and describe
+neither. Launching again resets it, because the model it describes is cold
+again.
 
 It is derived rather than watched: the probe is deliberately non-streaming — the
 same request `test_call.sh` makes, so the two stay comparable — so nothing sees

@@ -24,18 +24,22 @@ promesse fausse.
 | | Écran | Rôle |
 |---|---|---|
 | `1` | Models | Table des presets du `models.ini` actif + aperçu argv en direct |
-| `2` | Hub | Ce que llama.cpp a en cache : taille du modèle, disque du dépôt, preset qui l'utilise |
-| `3` | Server | État du cycle de vie, endpoint, uptime, sortie récente |
-| `4` | Router | Mode multi-modèles natif de llama-server + l'argv qu'il lancerait |
-| `5` | Test | Appel de chat sur le modèle chargé : réponse, latence, débit |
-| `6` | Stats | Compteurs de session, temps jusqu'au premier jeton, budget mémoire |
-| `7` | Settings | Clés `[server]` / `[*]` / par modèle, éditables |
-| `8` | Logs | Historique complet |
+| `2` | Server | État du cycle de vie, endpoint, uptime, sortie récente |
+| `3` | Router | Mode multi-modèles natif de llama-server + l'argv qu'il lancerait |
+| `4` | Test | Appel de chat sur le modèle chargé : réponse, latence, débit |
+| `5` | Stats | Compteurs de session, temps jusqu'au premier jeton, budget mémoire |
+| `6` | Settings | Clés `[server]` / `[*]` / par modèle, éditables |
+| `7` | Logs | Historique complet |
+| `8` | Hub | Ce que llama.cpp a en cache : taille du modèle, disque du dépôt, preset qui l'utilise |
 
-Les chiffres sont **positionnels** : insérer un écran renumérote les suivants.
-Rien ne doit en coder un en dur — ni un test, ni une chaîne dans un composant.
-`Router` puis `Hub` ont été insérés à côté de l'écran dont ils complètent la
-question ; la renumérotation n'a rien coûté d'autre que cette règle.
+L'ordre du menu suit **la fréquence d'usage**, pas la parenté des écrans : les
+sept premiers sont ceux que traverse une session, Hub est celui où l'on passe de
+temps en temps pour voir ce que le cache retient.
+
+Les chiffres sont **positionnels** : insérer ou déplacer un écran renumérote les
+autres. Rien ne doit en coder un en dur — ni un test, ni une chaîne dans un
+composant. L'ordre ne vit que dans `Screen::ALL`, donc déplacer un écran tient
+en une ligne.
 
 ## Cycle de vie
 

@@ -377,6 +377,45 @@
       a command that is no longer listed and still runs is the same drift
       `commands.rs` prevents, pointing the other way.
 
+- [x] move Hub to the last entry in the menu → `Screen::ALL` reordered,
+      which is the only place the menu order lives, so it was a one-line
+      change. The digits follow (`8` is Hub now), and nothing needed
+      renumbering by hand because no test and no component hard-codes one.
+    - The order now follows **how often a screen is wanted** rather than
+      how closely it relates to its neighbour: the first seven are what a
+      session moves through, Hub is where you go occasionally.
+
+- [x] increase the Hub list's first column width → two changes, because
+      raising the cap alone would have done nothing at 100 columns.
+    - `REF_MAX` 56 → 76, wide enough for the longest reference on this
+      machine (the 73-character huihui one), so a wide terminal shows it
+      whole.
+    - **The fit order was backwards.** It shrank the reference to its
+      minimum *before* dropping anything, so a 100-column terminal showed
+      `…h/gemma-4-12B-it-qat-GGUF:Q4_K_XL` while still finding room for a
+      disk figure. The reference now gives ground only to `REF_COMFORT`
+      (42 — a full `unsloth/…:Q4_K_XL` is 39), then DISK goes, then it
+      gives the rest, and the preset name goes last. At 100 columns nine
+      of eleven references now read in full.
+    - A test walks every width and fails if a column was dropped while
+      more room than it needed went unused — the mistake a fixed drop
+      order invites at the width where both would have fitted.
+
+- [x] TTFT measured only on the first call after a model loads →
+      `SessionStats::first_token`, recorded when `probes == 0` and never
+      again; the screen reads `4.20s  (first call after loading)`.
+    - That request is the only one that measures anything: it finds the
+      weights cold and the cache empty. Every probe after it is answered
+      by a resident, warm model, so the running average this replaces
+      drifted towards the warm figure the more probes were run — and
+      described neither.
+    - A relaunch measures again, since `SessionStats` is reset on every
+      `Starting` and the model is cold once more.
+    - If that first probe's server sends no `timings` there is no cold
+      measurement to be had this session: the screen says so rather than
+      quietly substituting the second probe, which would be a warm number
+      wearing a cold label.
+
 - [x] ensure doc and specs are up to date → `herd-spec-kit/` was two
       releases stale: it still listed six screens and no Router. Product,
       UX, architecture, data-model, services, roadmap, layout, theme and

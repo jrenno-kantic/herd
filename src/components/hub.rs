@@ -176,13 +176,26 @@ struct Columns {
     preset: bool,
 }
 
+/// `1023.9M` is the widest this can render.
 const W_SIZE: usize = 7;
+/// The same, plus the shared-repo `*`.
 const W_DISK: usize = 8;
 const W_PRESET: usize = 20;
 /// Selection caret and a space.
 const W_MARKER: usize = 2;
 const REF_MIN: usize = 20;
-const REF_MAX: usize = 56;
+/// Wide enough for the longest reference on this machine —
+/// `huihui-ai/Huihui-Qwen3.6-35B-A3B-Claude-4.7-Opus-abliterated-MTP-GGUF:Q4_K`
+/// is 73 characters — so a wide terminal shows it whole rather than
+/// eliding a name that is mostly what distinguishes it from its neighbour.
+const REF_MAX: usize = 76;
+/// The width below which the reference stops giving ground and something
+/// else goes instead.
+///
+/// `unsloth/gemma-4-12B-it-qat-GGUF:Q4_K_XL` is 39 characters, and the
+/// shipped tiers are full of names that long. Shrinking past this turns
+/// the column that identifies the row into a stub of a vendor prefix.
+const REF_COMFORT: usize = 42;
 
 impl Columns {
     fn width(&self) -> usize {
@@ -199,6 +212,16 @@ impl Columns {
         total
     }
 
+    /// Fits the table to `width`, **spending the last columns on the
+    /// reference rather than on the numbers beside it.**
+    ///
+    /// The order matters and used to be wrong: shrinking the reference all
+    /// the way to `REF_MIN` before dropping anything meant a 100-column
+    /// terminal showed `…h/gemma-4-12B-it-qat-GGUF:Q4_K_XL` while still
+    /// finding room for a disk figure. The name is what identifies the row;
+    /// the disk usage is a number you look at once. So the reference gives
+    /// ground only to `REF_COMFORT`, then DISK goes, then it gives the
+    /// rest, and only then does the preset name go.
     fn for_width(width: usize) -> Self {
         let mut columns = Self {
             reference: REF_MAX,
@@ -206,22 +229,29 @@ impl Columns {
             preset: true,
         };
 
-        while columns.width() > width && columns.reference > REF_MIN {
-            columns.reference -= 1;
-        }
-
-        // Disk goes before the preset name: the colour already says whether
-        // a row is unreferenced, but it cannot say *which* preset uses it.
-        for drop in [true, false] {
-            if columns.width() <= width {
-                break;
+        // Each step runs only if the row is still too wide for the pane.
+        let shrink_to = |columns: &mut Self, floor: usize| {
+            while columns.width() > width && columns.reference > floor {
+                columns.reference -= 1;
             }
-            match drop {
-                true => columns.disk = false,
-                false => columns.preset = false,
-            }
-        }
+        };
 
+        shrink_to(&mut columns, REF_COMFORT);
+
+        if columns.width() > width {
+            columns.disk = false;
+        }
+        shrink_to(&mut columns, REF_MIN);
+
+        // The preset name is last to go: the colour already says whether a
+        // row is unreferenced, but it cannot say *which* preset uses it.
+        if columns.width() > width {
+            columns.preset = false;
+        }
+        shrink_to(&mut columns, REF_MIN);
+
+        // Whatever is spare goes back to the reference — a wider terminal
+        // should show more of the name, not more empty space.
         while columns.width() < width && columns.reference < REF_MAX {
             columns.reference += 1;
         }
@@ -340,6 +370,50 @@ mod tests {
             columns = Columns::for_width(columns.width() - 1);
         }
         assert!(columns.preset, "the preset name went before the disk usage");
+    }
+
+    /// The reference outranks the numbers beside it.
+    ///
+    /// The layout this replaced shrank the reference to its minimum
+    /// *before* dropping anything, so a 100-column terminal showed
+    /// `…h/gemma-4-12B-it-qat-GGUF:Q4_K_XL` while still finding room for a
+    /// disk figure. The name is what identifies the row.
+    #[test]
+    fn a_narrow_pane_spends_its_last_columns_on_the_reference() {
+        let columns = Columns::for_width(NARROW);
+
+        assert!(!columns.disk, "disk survived at the reference's expense");
+        assert!(
+            columns.reference >= REF_COMFORT,
+            "the reference was cut to {} at {NARROW} columns",
+            columns.reference
+        );
+        // The width that matters in practice: a full unsloth reference.
+        assert!(columns.reference >= "unsloth/gemma-4-12B-it-qat-GGUF:Q4_K_XL".len());
+    }
+
+    /// Dropping a column must never leave more space unused than the
+    /// column needed — the mistake a fixed drop order invites at the width
+    /// where both would have fitted.
+    #[test]
+    fn no_width_wastes_room_a_dropped_column_would_have_fitted_in() {
+        for width in 0..=200 {
+            let columns = Columns::for_width(width);
+            let slack = width.saturating_sub(columns.width());
+
+            if !columns.disk {
+                assert!(
+                    slack < W_DISK + 1 || columns.reference == REF_MAX,
+                    "at {width}, disk was dropped with {slack} columns to spare"
+                );
+            }
+            if !columns.preset {
+                assert!(
+                    slack < W_PRESET + 1 || columns.reference == REF_MAX,
+                    "at {width}, the preset name was dropped with {slack} to spare"
+                );
+            }
+        }
     }
 
     #[test]

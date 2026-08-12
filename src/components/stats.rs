@@ -61,31 +61,27 @@ fn session(app: &App) -> Paragraph<'static> {
 /// looking at nothing for four seconds, and throughput alone reports that
 /// session as healthy.
 ///
-/// Says where the number came from, because it is derived from the round
+/// **Taken from the first probe after the load, and no other.** That is the
+/// only request that measures a cold model; every one after it is answered
+/// from resident weights and a warm cache, so a running average would drift
+/// towards the warm figure the more probes were run and would describe
+/// neither. The line says which probe it is from, so a reader is not left
+/// to assume it is the latest.
+///
+/// It also says where the number came from, being derived from the round
 /// trip and the server's own generation time rather than watched arriving —
 /// the probe is non-streaming. A server that sends no `timings` gets a
 /// plain `-` rather than a zero.
 fn first_token(app: &App) -> String {
     let stats = &app.llama.stats;
 
-    let mut parts = Vec::new();
-    if let Some(average) = stats.average_ttft() {
-        parts.push(format!("{} avg", seconds(average)));
-    }
-    if let Some(last) = stats.last_ttft {
-        parts.push(format!("{} last", seconds(last)));
-    }
-    if let Some(best) = stats.best_ttft {
-        parts.push(format!("{} best", seconds(best)));
-    }
-
-    if parts.is_empty() {
-        match stats.probes {
-            0 => format!("-  (run a test on screen {})", screen_number(Screen::Test)),
-            _ => "-  (this server reports no timings)".to_string(),
-        }
-    } else {
-        parts.join("  ·  ")
+    match (stats.first_token, stats.probes) {
+        (Some(cold), _) => format!("{}  (first call after loading)", seconds(cold)),
+        (None, 0) => format!("-  (run a test on screen {})", screen_number(Screen::Test)),
+        // The first probe answered but its server accounts for nothing, so
+        // there is no cold measurement to be had this session — and the
+        // second probe is not a stand-in for it.
+        (None, _) => "-  (that server reported no timings)".to_string(),
     }
 }
 
@@ -261,6 +257,16 @@ mod tests {
         assert!(first_token(&app()).contains(&expected));
     }
 
+    /// Sends a probe whose server accounts for `predicted` ms of
+    /// generation, so a TTFT can be derived from it.
+    fn timed_probe(app: &mut App, latency: u64, predicted: f64) {
+        app.update(UiEvent::ChatResult(Box::new(Ok(ChatOutcome {
+            latency: Duration::from_secs(latency),
+            predicted_ms: Some(predicted),
+            ..ChatOutcome::sample()
+        }))));
+    }
+
     /// TTFT and throughput answer different questions, and the case that
     /// separates them is a model that is slow to *start*: 5s of wait, then
     /// 100 tokens in 1s. Throughput calls that fast; the wait is what the
@@ -268,45 +274,60 @@ mod tests {
     #[test]
     fn time_to_first_token_is_the_wait_before_generation() {
         let mut app = app();
-        app.update(UiEvent::ChatResult(Box::new(Ok(ChatOutcome {
-            latency: Duration::from_secs(6),
-            predicted_ms: Some(1_000.0),
-            ..ChatOutcome::sample()
-        }))));
+        timed_probe(&mut app, 6, 1_000.0);
 
         let text = first_token(&app);
-        assert!(text.contains("5.00s last"), "{text}");
-        assert!(text.contains("5.00s best"), "{text}");
+        assert!(text.contains("5.00s"), "{text}");
+        assert!(text.contains("first call after loading"), "{text}");
     }
 
-    /// The best TTFT is the *shortest*, unlike the best rate. A minimum
-    /// dressed up as a maximum is the kind of bug that reads as correct
-    /// forever.
+    /// **Only the first call after a load measures anything.** Every probe
+    /// after it is answered from resident weights and a warm cache, so a
+    /// later — invariably faster — one must not replace the cold figure,
+    /// and must not be averaged into it either.
     #[test]
-    fn the_best_time_to_first_token_is_the_shortest_one() {
+    fn only_the_first_probe_after_a_load_is_measured() {
         let mut app = app();
-        for (latency, predicted) in [(6u64, 1_000.0), (3, 1_000.0)] {
-            app.update(UiEvent::ChatResult(Box::new(Ok(ChatOutcome {
-                latency: Duration::from_secs(latency),
-                predicted_ms: Some(predicted),
-                ..ChatOutcome::sample()
-            }))));
-        }
+        timed_probe(&mut app, 6, 1_000.0);
+        timed_probe(&mut app, 2, 1_000.0);
+        timed_probe(&mut app, 1, 500.0);
 
-        let text = first_token(&app);
-        assert!(text.contains("2.00s best"), "{text}");
-        assert!(text.contains("3.50s avg"), "{text}");
+        assert_eq!(app.llama.stats.first_token, Some(Duration::from_secs(5)));
+        assert!(first_token(&app).contains("5.00s"), "{}", first_token(&app));
+    }
+
+    /// ...and a new launch starts the measurement again, since the model
+    /// it describes is a different one — or the same one, cold again.
+    #[test]
+    fn a_new_launch_measures_the_next_first_call() {
+        let mut app = app();
+        timed_probe(&mut app, 6, 1_000.0);
+
+        app.update(UiEvent::LlamaStatus(
+            crate::services::llama::LlamaSnapshot::new(
+                crate::services::llama::ServerState::Starting,
+                crate::services::llama::LauncherMode::Manual,
+                Some("gemma4-12b".into()),
+            ),
+        ));
+        assert_eq!(app.llama.stats.first_token, None, "the old figure survived");
+
+        timed_probe(&mut app, 9, 1_000.0);
+        assert_eq!(app.llama.stats.first_token, Some(Duration::from_secs(8)));
     }
 
     /// A server that sends no `timings` has no TTFT to report, and must
     /// say so rather than showing a zero — the same restraint as
-    /// `Fit::Unknown`.
+    /// `Fit::Unknown`. The *second* probe is not a stand-in for the first:
+    /// by then the model is warm, so there is simply no cold measurement
+    /// to be had this session.
     #[test]
     fn a_server_without_timings_reports_no_first_token_time() {
         let mut app = app();
         probe(&mut app, 10, 5.0, 1);
+        timed_probe(&mut app, 6, 1_000.0);
 
-        assert!(app.llama.stats.average_ttft().is_none());
+        assert_eq!(app.llama.stats.first_token, None);
         assert!(
             first_token(&app).contains("no timings"),
             "{}",

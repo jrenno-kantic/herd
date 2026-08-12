@@ -9,18 +9,21 @@ Inspired by lazygit and k9s: dense, keyboard-first, one screen per concern.
 | | Screen | Purpose |
 |---|---|---|
 | `1` | Models | Preset table for the active `models.ini` + live argv preview |
-| `2` | Hub | What llama.cpp has in its cache: size, disk, and the preset using it |
-| `3` | Server | Lifecycle state, endpoint, uptime, recent output |
-| `4` | Router | llama-server's own multi-model mode + the argv it would start |
-| `5` | Test | Chat probe against the running model: reply, latency, token rate |
-| `6` | Stats | Session counters, time to first token, and the memory budget |
-| `7` | Settings | Editable `[server]` / `[*]` / per-model keys |
-| `8` | Logs | Full history |
+| `2` | Server | Lifecycle state, endpoint, uptime, recent output |
+| `3` | Router | llama-server's own multi-model mode + the argv it would start |
+| `4` | Test | Chat probe against the running model: reply, latency, token rate |
+| `5` | Stats | Session counters, time to first token, and the memory budget |
+| `6` | Settings | Editable `[server]` / `[*]` / per-model keys |
+| `7` | Logs | Full history |
+| `8` | Hub | What llama.cpp has in its cache: size, disk, and the preset using it |
 
-The digits are **positional**: inserting a screen renumbers the ones after it.
-Nothing may hard-code one — not a test, and not a string in a component. Both
-`Hub` and `Router` were inserted next to the screen they answer half a question
-with, and the renumbering cost nothing but this rule.
+Menu order follows **how often a screen is wanted**, not how closely it relates
+to its neighbour: the first seven are what a session moves through, and Hub is
+where you go occasionally to see what the cache is holding.
+
+The digits are **positional**: inserting or moving a screen renumbers the rest.
+Nothing may hard-code one — not a test, and not a string in a component. The
+order lives in `Screen::ALL` alone, so moving one is a single line.
 
 ## Modes
 

@@ -97,10 +97,13 @@ Reset on every launch. `started_at: Option<DateTime<Local>>`, `probes`,
 `best_rate`. `average_rate()` is total tokens over total time, not a mean of
 per-request rates.
 
-Time to first token is counted separately — `ttft_probes`, `total_ttft`,
-`last_ttft`, `best_ttft` — because a server that sends no `timings` still
-answers, and averaging it in would halve the figure. `best_ttft` is a
-**minimum** where `best_rate` is a maximum: a shorter wait is a better one.
+`first_token: Option<Duration>` holds the time to first token of **the first
+probe after the load, and no other** — the only request that measures a cold
+model. Later probes are answered from resident weights and a warm cache, so
+averaging them in would drift the figure towards the warm one and describe
+neither. Reset with the rest on every `Starting`, so a relaunch measures again;
+`None` when that first probe's server reported no `timings`, since the second
+probe is not a stand-in for it.
 
 ## Budget / Fit
 

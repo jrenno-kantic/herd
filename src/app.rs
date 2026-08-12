@@ -22,9 +22,15 @@ const MAX_LOGS: usize = 500;
 pub enum Screen {
     Models,
     /// What is actually in llama.cpp's model cache, as against what the
-    /// active tier names. Sits next to Models because it answers the other
-    /// half of the same question — Models lists what this tier can launch,
-    /// Hub lists what this machine has.
+    /// active tier names: Models lists what this tier can launch, Hub
+    /// lists what this machine has.
+    ///
+    /// **Last in the menu**, though it answers the other half of the
+    /// Models screen's question. The six screens before it are the ones a
+    /// session moves through — browse, launch, watch, probe — and Hub is
+    /// where you go occasionally, to see what the cache is holding. Menu
+    /// order follows how often a screen is wanted, not how related it is
+    /// to its neighbour.
     Hub,
     Server,
     /// llama-server's built-in multi-model mode. Sits next to Server
@@ -39,15 +45,18 @@ pub enum Screen {
 }
 
 impl Screen {
+    /// The order of the sidebar menu, and so of the digit shortcuts.
+    /// Independent of the enum's own order, which is why moving a screen
+    /// here is a one-line change.
     pub const ALL: [Screen; 8] = [
         Screen::Models,
-        Screen::Hub,
         Screen::Server,
         Screen::Router,
         Screen::Test,
         Screen::Stats,
         Screen::Settings,
         Screen::Logs,
+        Screen::Hub,
     ];
 
     pub fn label(self) -> &'static str {
@@ -244,16 +253,20 @@ pub struct SessionStats {
     pub total_latency: std::time::Duration,
     pub last_rate: Option<f64>,
     pub best_rate: Option<f64>,
-    /// Time to first token, over the probes whose server reported enough
-    /// to derive one. Counted separately from `probes` because a server
-    /// that sends no `timings` still answers, and averaging over requests
-    /// that contributed nothing would quietly halve the figure.
-    pub ttft_probes: usize,
-    pub total_ttft: std::time::Duration,
-    pub last_ttft: Option<std::time::Duration>,
-    /// The *fastest* seen, so this one is a minimum where `best_rate` is a
-    /// maximum: a shorter wait is a better one.
-    pub best_ttft: Option<std::time::Duration>,
+    /// Time to first token, from **the first probe after the model
+    /// loaded** and no other.
+    ///
+    /// Only that one measures anything: it is the request that finds the
+    /// weights cold and the cache empty. Every probe after it is answered
+    /// by a model already resident and warm, so averaging them together
+    /// produces a number describing neither — and the cold figure, the one
+    /// that answers "how long until this thing is usable", would be
+    /// dragged towards the warm ones the more probes were run.
+    ///
+    /// `None` until the first probe answers, and `None` afterwards if that
+    /// probe's server sent no `timings` — the second probe is not a
+    /// stand-in for it.
+    pub first_token: Option<std::time::Duration>,
 }
 
 impl SessionStats {
@@ -265,6 +278,9 @@ impl SessionStats {
     }
 
     fn record(&mut self, outcome: &ChatOutcome) {
+        // Read before the counter moves: this is what makes it the *first*
+        // probe rather than the most recent one.
+        let is_first = self.probes == 0;
         self.probes += 1;
         self.prompt_tokens += outcome.prompt_tokens.unwrap_or(0);
         self.completion_tokens += outcome.completion_tokens.unwrap_or(0);
@@ -275,17 +291,12 @@ impl SessionStats {
             self.best_rate = Some(self.best_rate.map_or(rate, |best| best.max(rate)));
         }
 
-        if let Some(ttft) = outcome.ttft() {
-            self.ttft_probes += 1;
-            self.total_ttft += ttft;
-            self.last_ttft = Some(ttft);
-            self.best_ttft = Some(self.best_ttft.map_or(ttft, |best| best.min(ttft)));
+        // The cold-start measurement, taken once. `SessionStats` is reset
+        // on every `Starting`, so "the first probe of the session" and
+        // "the first call after this model loaded" are the same thing.
+        if is_first {
+            self.first_token = outcome.ttft();
         }
-    }
-
-    /// Mean time to first token across the probes that reported one.
-    pub fn average_ttft(&self) -> Option<std::time::Duration> {
-        (self.ttft_probes > 0).then(|| self.total_ttft / self.ttft_probes as u32)
     }
 
     /// Output tokens per second across every probe of this session, which

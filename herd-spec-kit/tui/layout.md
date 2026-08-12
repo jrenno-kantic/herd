@@ -7,18 +7,18 @@ Terminal geometry, built in `layout.rs`.
 | Sidebar      | Active screen         |
 | (24 cols)    |                       |
 | 1 Models     | Models:   table       |
-| 2 Hub        |           + argv      |
-| 3 Server     | Hub:      cache list  |
-| 4 Router     | Server:   summary     |
-| 5 Test       |           + log tail  |
-| 6 Stats      | Router:   settings    |
-| 7 Settings   |           + argv      |
-| 8 Logs       | Test:     request     |
-|              |           + response  |
-| tier  32gb   | Stats:    session     |
-| RAM   36 GiB |           + memory    |
-|              | Settings: key list    |
+| 2 Server     |           + argv      |
+| 3 Router     | Server:   summary     |
+| 4 Test       |           + log tail  |
+| 5 Stats      | Router:   settings    |
+| 6 Settings   |           + argv      |
+| 7 Logs       | Test:     request     |
+| 8 Hub        |           + response  |
+|              | Stats:    session     |
+| tier  32gb   |           + memory    |
+| RAM   36 GiB | Settings: key list    |
 |              | Logs:     history     |
+|              | Hub:      cache list  |
 +--------------+-----------------------+
 | Command Bar                (3 rows)  |
 +--------------------------------------+
