@@ -1,4 +1,4 @@
-use crate::services::llama::{api::ChatOutcome, LlamaSnapshot};
+use crate::services::llama::{api::ChatOutcome, hub::CachedModel, LlamaSnapshot};
 use crossterm::event::{self, Event, KeyEvent, KeyEventKind};
 use std::sync::{
     atomic::{AtomicBool, Ordering},
@@ -33,9 +33,10 @@ pub enum UiEvent {
     /// structured outcome rather than a formatted line, so the Test screen
     /// can show reply, latency and token stats separately.
     ChatResult(Box<Result<ChatOutcome, String>>),
-    /// What `llama-server --cache-list` reports it has locally. Refreshed
-    /// on startup, on reload, and after a download.
-    CacheList(Vec<String>),
+    /// What `llama-server --cache-list` reports it has locally, with what
+    /// each entry occupies on disk. Refreshed on startup, on reload, and
+    /// after a download.
+    CacheList(Vec<CachedModel>),
     /// A download is in flight. Byte counts, not percentages, so the bar
     /// and the "2.1G of 6.7G" text come from the same numbers.
     DownloadProgress {

@@ -66,8 +66,8 @@ pub const GLOBAL: &[Binding] = &[
     brief(&["tab", "right"], "tab/→", "screen", "next screen"),
     full(&["shift+tab", "left"], "⇧tab/←", "previous screen"),
     full(
-        &["1", "2", "3", "4", "5", "6", "7"],
-        "1–7",
+        &["1", "2", "3", "4", "5", "6", "7", "8"],
+        "1–8",
         "jump straight to a screen",
     ),
     brief(&["c"], "c", "config", "choose which models.ini to use"),
@@ -151,6 +151,24 @@ const MODELS: &[Binding] = &[
     full(&["r"], "r", "re-read models.ini from disk"),
 ];
 
+/// The cache, as against the tier. There is deliberately no delete key —
+/// see `App::handle_hub_key`.
+const HUB: &[Binding] = &[
+    brief(
+        &["y"],
+        "y",
+        "copy preset",
+        "copy a models.ini stanza for this model",
+    ),
+    brief(
+        &["enter"],
+        "enter",
+        "show",
+        "show this model's preset on the Models screen",
+    ),
+    brief(&["r"], "r", "refresh", "ask llama.cpp again what it has"),
+];
+
 const SERVER: &[Binding] = &[
     brief(
         &["enter"],
@@ -218,6 +236,7 @@ const SETTINGS: &[Binding] = &[
 pub fn for_screen(screen: Screen) -> Vec<Binding> {
     let (moves, own): (bool, &[Binding]) = match screen {
         Screen::Models => (true, MODELS),
+        Screen::Hub => (true, HUB),
         Screen::Server => (false, SERVER),
         // The shared movement keys, even though there are only two rows:
         // they all reach `moved`, so they all have to be documented.

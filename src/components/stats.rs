@@ -47,9 +47,62 @@ fn session(app: &App) -> Paragraph<'static> {
         field("tokens in", stats.prompt_tokens.to_string()),
         field("tokens out", stats.completion_tokens.to_string()),
         field("throughput", throughput(app)),
+        field("first token", first_token(app)),
     ];
 
     Paragraph::new(lines).block(block(" Session "))
+}
+
+/// Time to first token: how long the model takes to *start* answering, as
+/// against how fast it answers once it has.
+///
+/// The two come apart exactly where it matters. A model paging its weights
+/// in can generate at a perfectly respectable rate and still leave the user
+/// looking at nothing for four seconds, and throughput alone reports that
+/// session as healthy.
+///
+/// Says where the number came from, because it is derived from the round
+/// trip and the server's own generation time rather than watched arriving —
+/// the probe is non-streaming. A server that sends no `timings` gets a
+/// plain `-` rather than a zero.
+fn first_token(app: &App) -> String {
+    let stats = &app.llama.stats;
+
+    let mut parts = Vec::new();
+    if let Some(average) = stats.average_ttft() {
+        parts.push(format!("{} avg", seconds(average)));
+    }
+    if let Some(last) = stats.last_ttft {
+        parts.push(format!("{} last", seconds(last)));
+    }
+    if let Some(best) = stats.best_ttft {
+        parts.push(format!("{} best", seconds(best)));
+    }
+
+    if parts.is_empty() {
+        match stats.probes {
+            0 => format!("-  (run a test on screen {})", screen_number(Screen::Test)),
+            _ => "-  (this server reports no timings)".to_string(),
+        }
+    } else {
+        parts.join("  ·  ")
+    }
+}
+
+fn seconds(duration: std::time::Duration) -> String {
+    format!("{:.2}s", duration.as_secs_f64())
+}
+
+/// The digit that jumps to a screen. Derived rather than written down: the
+/// shortcuts are positional, so inserting a screen renumbers every one
+/// after it — and this line said "screen 3" for a while after the Router
+/// screen took that number.
+fn screen_number(screen: Screen) -> usize {
+    Screen::ALL
+        .iter()
+        .position(|&candidate| candidate == screen)
+        .map(|index| index + 1)
+        .unwrap_or_default()
 }
 
 fn throughput(app: &App) -> String {
@@ -67,7 +120,7 @@ fn throughput(app: &App) -> String {
     }
 
     if parts.is_empty() {
-        "-  (run a test on screen 3)".to_string()
+        format!("-  (run a test on screen {})", screen_number(Screen::Test))
     } else {
         parts.join("  ·  ")
     }
@@ -197,9 +250,68 @@ mod tests {
         assert_eq!(format_duration(3725), "1h02m05s");
     }
 
+    /// The pointer is derived from `Screen::ALL`, so inserting a screen
+    /// cannot leave it naming the wrong one — which is what happened when
+    /// the Router screen took number 3.
     #[test]
     fn throughput_points_at_the_test_screen_before_any_probe() {
-        assert!(throughput(&app()).contains("screen 3"));
+        let expected = format!("screen {}", screen_number(Screen::Test));
+
+        assert!(throughput(&app()).contains(&expected));
+        assert!(first_token(&app()).contains(&expected));
+    }
+
+    /// TTFT and throughput answer different questions, and the case that
+    /// separates them is a model that is slow to *start*: 5s of wait, then
+    /// 100 tokens in 1s. Throughput calls that fast; the wait is what the
+    /// user sat through.
+    #[test]
+    fn time_to_first_token_is_the_wait_before_generation() {
+        let mut app = app();
+        app.update(UiEvent::ChatResult(Box::new(Ok(ChatOutcome {
+            latency: Duration::from_secs(6),
+            predicted_ms: Some(1_000.0),
+            ..ChatOutcome::sample()
+        }))));
+
+        let text = first_token(&app);
+        assert!(text.contains("5.00s last"), "{text}");
+        assert!(text.contains("5.00s best"), "{text}");
+    }
+
+    /// The best TTFT is the *shortest*, unlike the best rate. A minimum
+    /// dressed up as a maximum is the kind of bug that reads as correct
+    /// forever.
+    #[test]
+    fn the_best_time_to_first_token_is_the_shortest_one() {
+        let mut app = app();
+        for (latency, predicted) in [(6u64, 1_000.0), (3, 1_000.0)] {
+            app.update(UiEvent::ChatResult(Box::new(Ok(ChatOutcome {
+                latency: Duration::from_secs(latency),
+                predicted_ms: Some(predicted),
+                ..ChatOutcome::sample()
+            }))));
+        }
+
+        let text = first_token(&app);
+        assert!(text.contains("2.00s best"), "{text}");
+        assert!(text.contains("3.50s avg"), "{text}");
+    }
+
+    /// A server that sends no `timings` has no TTFT to report, and must
+    /// say so rather than showing a zero — the same restraint as
+    /// `Fit::Unknown`.
+    #[test]
+    fn a_server_without_timings_reports_no_first_token_time() {
+        let mut app = app();
+        probe(&mut app, 10, 5.0, 1);
+
+        assert!(app.llama.stats.average_ttft().is_none());
+        assert!(
+            first_token(&app).contains("no timings"),
+            "{}",
+            first_token(&app)
+        );
     }
 
     /// The average must come from totals, not from averaging the

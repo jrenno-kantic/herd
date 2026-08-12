@@ -53,6 +53,17 @@ impl Theme {
             .add_modifier(Modifier::BOLD)
     }
 
+    /// A cached model no preset in the active tier names.
+    ///
+    /// Deliberately not red: it is not an error, it is disk this tier
+    /// cannot launch — which may be exactly right if it belongs to another
+    /// tier. Cyan because the two colours already spoken for on a list row
+    /// mean "too large" (red) and "tight" (yellow), and a third meaning on
+    /// either of those would be read as a fourth severity.
+    pub fn unreferenced() -> Style {
+        Style::default().fg(Color::Cyan).bg(Color::Black)
+    }
+
     pub fn status_error() -> Style {
         Style::default()
             .fg(Color::Red)

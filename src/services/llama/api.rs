@@ -160,6 +160,31 @@ impl ChatOutcome {
 }
 
 impl ChatOutcome {
+    /// Time to the first token, as the client experienced it.
+    ///
+    /// **Derived, and only where the server accounts for its own
+    /// generation.** The probe is deliberately non-streaming — the same
+    /// request `test_call.sh` makes, so the two stay comparable — which
+    /// means nothing here ever sees the first token arrive. What is known
+    /// is the whole round trip, measured locally, and llama.cpp's
+    /// `predicted_ms` for the generation; the difference is everything
+    /// that happened *before* the first token, which is queueing, prompt
+    /// ingestion and the network. That is the number a user is asking for
+    /// when they ask how long until it starts answering.
+    ///
+    /// `None` when the server sends no `timings` — the usual restraint:
+    /// there is no honest TTFT to report, so none is reported. `None` too
+    /// when the subtraction goes negative, which is clock noise on a fast
+    /// local request rather than a measurement.
+    pub fn ttft(&self) -> Option<Duration> {
+        let predicted = self
+            .predicted_ms
+            .filter(|ms| ms.is_finite() && *ms >= 0.0)?;
+
+        self.latency
+            .checked_sub(Duration::from_secs_f64(predicted / 1000.0))
+    }
+
     /// One-line summary for the log panel.
     pub fn summary(&self) -> String {
         let mut parts = vec![format!("{:.2}s", self.latency.as_secs_f64())];

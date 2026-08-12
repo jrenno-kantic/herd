@@ -169,10 +169,14 @@ fn table(frame: &mut Frame, app: &App, area: Rect) {
         );
 
         let fit = app.llama.fit(&row.name);
+        // `~` where the number is arithmetic on the repo name, nothing
+        // where the weights are on disk and could simply be measured. The
+        // heuristic has been wrong by a factor of four (`Q1_0` sized as a
+        // Q4), so the two are not worth showing as equally certain.
         let estimate = app
             .llama
-            .estimate_gib(&row.name)
-            .map(|gib| format!("{gib:.1}G"))
+            .sizing(&row.name)
+            .map(|sizing| sizing.label())
             .unwrap_or_else(|| "-".into());
 
         // "not local" earns a column of its own rather than a colour: it
@@ -226,6 +230,18 @@ fn table(frame: &mut Frame, app: &App, area: Rect) {
     // and `render` stays a pure function of `App` — no draw-time mutation.
     let mut state = ListState::default().with_selected(Some(app.llama.cursor.min(rows.len() - 1)));
     frame.render_stateful_widget(List::new(items), chunks[1], &mut state);
+
+    // Drawn beside the rows rather than down the whole pane, so the thumb
+    // spans the list and not the column header and footer around it. The
+    // `n/m` counter on the border says where the cursor ended up; this says
+    // how much list is above and below it while a page key is held.
+    components::list_scrollbar(
+        frame,
+        chunks[1],
+        area.x + area.width.saturating_sub(1),
+        rows.len(),
+        app.llama.cursor,
+    );
 }
 
 /// Which columns fit, given the width the table actually got.

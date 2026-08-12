@@ -57,6 +57,49 @@ fn bits_per_weight(reference: &str) -> Option<f64> {
 /// the ini does not state.
 const RUNTIME_OVERHEAD_GIB: f64 = 1.0;
 
+/// Where a size came from, so the UI can say.
+///
+/// The distinction is worth carrying: a measured figure is the file this
+/// machine will open, and an estimated one is arithmetic on a repo name
+/// that has been wrong before (`Q1_0` sized as a Q4, off by a factor of
+/// four). Marking them apart costs one character in the table and stops
+/// the two being read as equally certain.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum Sizing {
+    /// Read off the weights file already in the hub cache.
+    Measured(f64),
+    /// Derived from the parameter count and quantisation in the repo name.
+    Estimated(f64),
+}
+
+impl Sizing {
+    pub fn gib(self) -> f64 {
+        match self {
+            Sizing::Measured(gib) | Sizing::Estimated(gib) => gib,
+        }
+    }
+
+    pub fn is_measured(self) -> bool {
+        matches!(self, Sizing::Measured(_))
+    }
+
+    /// `8.1G`, or `~8.1G` when the number is arithmetic on a name.
+    pub fn label(self) -> String {
+        let mark = if self.is_measured() { "" } else { "~" };
+        format!("{mark}{:.1}G", self.gib())
+    }
+}
+
+/// Resident size of a model whose weights are already on disk.
+///
+/// The same runtime allowance the estimate adds, so a measured row and an
+/// estimated one mean the same thing and can be compared against the same
+/// budget. It is deliberately not "the file size": what the budget is
+/// judging is what the process will hold, not what the disk holds.
+pub fn measured_gib(weight_bytes: u64) -> f64 {
+    weight_bytes as f64 / BYTES_PER_GIB + RUNTIME_OVERHEAD_GIB
+}
+
 const BYTES_PER_GIB: f64 = 1_073_741_824.0;
 
 /// Parameter count in billions, read from a repo or preset name.

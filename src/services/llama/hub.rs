@@ -60,12 +60,82 @@ pub fn split_repo(reference: &str) -> (&str, Option<&str>) {
     }
 }
 
+/// One model llama.cpp reports in the local hub cache.
+///
+/// The size is an `Option` rather than a `0` default for the usual reason:
+/// a cache directory that cannot be read and one that is empty are
+/// different answers, and only one of them is worth printing.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CachedModel {
+    /// `repo:quant`, exactly as `--cache-list` spells it — which is not
+    /// always how the ini spells it (see [`availability`]).
+    pub reference: String,
+    /// What this model's **repo** occupies in the hub cache. Per repo
+    /// rather than per quantisation because that is the unit the cache
+    /// stores: one `blobs/` directory per repo, with no per-quant
+    /// accounting in it. A repo holding two quantisations therefore
+    /// reports the same total on both, which the UI marks as shared rather
+    /// than splitting into a number nobody measured.
+    ///
+    /// It is disk usage, not model size, and the two are not close: this
+    /// machine's `models--unsloth--gemma-4-12B-it-qat-GGUF` holds *two*
+    /// 6.7 GiB revisions of the same weights, because a repo that moves on
+    /// leaves the old blobs behind. That gap is the whole reason the
+    /// number is worth showing.
+    pub bytes: Option<u64>,
+    /// What llama.cpp would actually load for this entry: the weight files
+    /// of the **current revision** matching this quantisation, resolved
+    /// through the snapshot symlinks.
+    ///
+    /// Separate from `bytes` because they answer different questions —
+    /// "what would this cost me in memory" against "what would deleting it
+    /// give me back" — and on a repo with a stale revision they differ by
+    /// a factor of two.
+    pub weights: Option<u64>,
+}
+
+impl CachedModel {
+    pub fn repo(&self) -> &str {
+        split_repo(&self.reference).0
+    }
+
+    pub fn tag(&self) -> Option<&str> {
+        split_repo(&self.reference).1
+    }
+
+    /// Do two entries live in the same repo directory, and so share a size?
+    pub fn same_repo(&self, other: &CachedModel) -> bool {
+        self.repo().eq_ignore_ascii_case(other.repo())
+    }
+}
+
+/// An entry whose size has not been measured. The form the parser produces
+/// and the one the tests use.
+impl From<&str> for CachedModel {
+    fn from(reference: &str) -> Self {
+        Self::from(reference.to_string())
+    }
+}
+
+impl From<String> for CachedModel {
+    fn from(reference: String) -> Self {
+        Self {
+            reference,
+            bytes: None,
+            weights: None,
+        }
+    }
+}
+
 /// Reads `llama-server --cache-list` output into `repo:quant` entries.
 ///
 /// The first line is a count ("number of models in cache: 10") and the
 /// rest are numbered. Anything unparseable is skipped rather than guessed
 /// at — a mangled line must not become a phantom cached model.
-pub fn parse_cache_list(output: &str) -> Vec<String> {
+///
+/// Sizes are left unmeasured here: this is a pure parse, and reading the
+/// cache directory is [`measure`]'s job.
+pub fn parse_cache_list(output: &str) -> Vec<CachedModel> {
     output
         .lines()
         .filter_map(|line| {
@@ -73,9 +143,152 @@ pub fn parse_cache_list(output: &str) -> Vec<String> {
             let (index, rest) = line.split_once('.')?;
             index.trim().parse::<u32>().ok()?;
             let entry = rest.trim();
-            (!entry.is_empty() && entry.contains('/')).then(|| entry.to_string())
+            (!entry.is_empty() && entry.contains('/')).then(|| CachedModel::from(entry))
         })
         .collect()
+}
+
+/// Fills in what each cached repo occupies on disk.
+///
+/// Separate from the parse so the parse stays testable without a cache,
+/// and so a machine with no readable hub directory simply keeps `None`
+/// everywhere instead of reporting zeroes.
+pub fn measure(entries: &mut [CachedModel]) {
+    let Some(hub) = hub_dir() else {
+        return;
+    };
+
+    for entry in entries {
+        let (repo, tag) = split_repo(&entry.reference);
+        let dir = repo_dir(&hub, repo);
+
+        entry.bytes = repo_bytes(&dir);
+        entry.weights = snapshot_weights_bytes(&dir, tag);
+    }
+}
+
+/// Bytes held in a repo's blobs directory, or `None` when it cannot be
+/// read at all.
+///
+/// The blobs are the weights; the snapshot directory beside them is
+/// symlinks into these, so counting both would double every model.
+pub fn repo_bytes(repo_dir: &Path) -> Option<u64> {
+    let entries = std::fs::read_dir(repo_dir.join("blobs")).ok()?;
+
+    Some(
+        entries
+            .flatten()
+            .filter_map(|entry| entry.metadata().ok())
+            .filter(|meta| meta.is_file())
+            .map(|meta| meta.len())
+            .sum(),
+    )
+}
+
+/// The weights of one quantisation, as they sit in the cache **now**.
+///
+/// Read through `refs/main` and the snapshot directory rather than by
+/// summing blobs, because a repo keeps every revision it has ever fetched:
+/// on this machine `gemma-4-12B-it-qat-GGUF` holds two 6.7 GiB copies of
+/// the same file, and adding them up would announce a 12B model at 13.4
+/// GiB. The snapshot names exactly the file llama.cpp would open, and
+/// `metadata` follows the symlink to the blob behind it.
+///
+/// `None` when the revision, the directory or a matching file cannot be
+/// found — the same restraint as everywhere else here: a size that is not
+/// known is not a size of zero, and the caller falls back to the estimate.
+pub fn snapshot_weights_bytes(repo_dir: &Path, tag: Option<&str>) -> Option<u64> {
+    let needle = tag_needle(tag)?;
+    let dir = current_snapshot(repo_dir)?;
+
+    let candidates: Vec<(String, PathBuf)> = std::fs::read_dir(&dir)
+        .ok()?
+        .flatten()
+        .map(|entry| {
+            (
+                entry.file_name().to_string_lossy().to_string(),
+                entry.path(),
+            )
+        })
+        .filter(|(name, _)| is_weight_file(name) && matches_tag(stem_of(name), &needle))
+        .map(|(name, path)| (stem_of(&name).to_string(), path))
+        .collect();
+
+    let chosen = keep_shortest_base(candidates, &needle);
+    if chosen.is_empty() {
+        return None;
+    }
+
+    // A split model is several files and one model; anything that failed to
+    // resolve is skipped rather than counted as nothing, so a half-linked
+    // snapshot under-reports instead of inventing a size.
+    Some(
+        chosen
+            .iter()
+            .filter_map(|path| std::fs::metadata(path).ok())
+            .map(|meta| meta.len())
+            .sum(),
+    )
+}
+
+/// The snapshot directory `refs/main` points at.
+///
+/// Falls back to the only snapshot there is when the ref cannot be read: a
+/// repo with exactly one revision is unambiguous, and refusing to answer
+/// there would lose the measurement for no gain. With several and no ref,
+/// nothing is claimed — guessing which revision is current is guessing the
+/// answer.
+fn current_snapshot(repo_dir: &Path) -> Option<PathBuf> {
+    let snapshots = repo_dir.join("snapshots");
+
+    if let Ok(revision) = std::fs::read_to_string(repo_dir.join("refs").join("main")) {
+        let revision = revision.trim();
+        if !revision.is_empty() && snapshots.join(revision).is_dir() {
+            return Some(snapshots.join(revision));
+        }
+    }
+
+    let mut dirs = std::fs::read_dir(&snapshots)
+        .ok()?
+        .flatten()
+        .map(|entry| entry.path())
+        .filter(|path| path.is_dir());
+
+    match (dirs.next(), dirs.next()) {
+        (Some(only), None) => Some(only),
+        _ => None,
+    }
+}
+
+/// What a cached entry of `reference` was measured at, if one is cached
+/// under the *same* quantisation.
+///
+/// The tag has to match, unlike [`availability`], which deliberately
+/// accepts a repo cached under any tag. The two answer different
+/// questions: "will launching download anything" is about the repo, but
+/// "how much memory will this take" is about the exact build — reporting a
+/// cached Q8's size against a preset asking for Q4 would be a confident,
+/// specific and wrong number, which is worse than falling back to the
+/// estimate the module already documents as one.
+pub fn measured_weights(reference: &str, cached: &[CachedModel]) -> Option<u64> {
+    let (repo, tag) = split_repo(reference);
+    let wanted = tag.map(normalised_tag)?;
+
+    cached
+        .iter()
+        .filter(|entry| entry.repo().eq_ignore_ascii_case(repo))
+        .find(|entry| entry.tag().map(normalised_tag).as_deref() == Some(wanted.as_str()))
+        .and_then(|entry| entry.weights)
+}
+
+/// A quant tag as both spellings agree on it.
+///
+/// The ini says `UD-Q4_K_XL` where `--cache-list` reports `Q4_K_XL`,
+/// llama.cpp having dropped Unsloth's dynamic-quantisation prefix. They are
+/// the same build, and only compare equal once that prefix is off both.
+fn normalised_tag(tag: &str) -> String {
+    let tag = tag.trim().to_ascii_lowercase();
+    tag.strip_prefix("ud-").unwrap_or(&tag).to_string()
 }
 
 /// Is `reference` (an ini `hf-repo` value) among the cached entries?
@@ -90,13 +303,10 @@ pub fn parse_cache_list(output: &str) -> Vec<String> {
 /// already have because a naming convention moved — and being wrong in
 /// that direction is the more expensive mistake, since the launch itself
 /// will fetch anything genuinely absent.
-pub fn availability(reference: &str, cached: &[String]) -> Availability {
+pub fn availability(reference: &str, cached: &[CachedModel]) -> Availability {
     let (repo, tag) = split_repo(reference);
 
-    let same_repo = |entry: &String| {
-        let (cached_repo, _) = split_repo(entry);
-        cached_repo.eq_ignore_ascii_case(repo)
-    };
+    let same_repo = |entry: &CachedModel| entry.repo().eq_ignore_ascii_case(repo);
 
     match (cached.iter().any(same_repo), tag) {
         (false, _) => Availability::Missing,
@@ -104,8 +314,9 @@ pub fn availability(reference: &str, cached: &[String]) -> Availability {
     }
 }
 
-/// Asks llama.cpp what it has. Cheap enough to run on every config load.
-pub async fn cache_list() -> Result<Vec<String>, String> {
+/// Asks llama.cpp what it has, and measures what it costs. Cheap enough to
+/// run on every config load.
+pub async fn cache_list() -> Result<Vec<CachedModel>, String> {
     let output = tokio::process::Command::new(super::process::BINARY)
         .arg("--cache-list")
         .output()
@@ -120,7 +331,10 @@ pub async fn cache_list() -> Result<Vec<String>, String> {
         String::from_utf8_lossy(&output.stderr)
     );
 
-    Ok(parse_cache_list(&text))
+    let mut entries = parse_cache_list(&text);
+    measure(&mut entries);
+
+    Ok(entries)
 }
 
 /// The files a repo holds, with their sizes — what the confirmation
@@ -202,11 +416,11 @@ impl RepoFile {
     }
 
     fn is_mmproj(&self) -> bool {
-        !self.is_dir() && self.path.to_ascii_lowercase().starts_with("mmproj")
+        !self.is_dir() && looks_like_mmproj(&self.path)
     }
 
     fn is_mtp(&self) -> bool {
-        !self.is_dir() && self.path.to_ascii_lowercase().starts_with("mtp")
+        !self.is_dir() && looks_like_mtp(&self.path)
     }
 }
 
@@ -270,34 +484,69 @@ fn pick_one<'a>(candidates: impl Iterator<Item = &'a RepoFile>) -> Option<RepoFi
 /// The shortest match wins, which is the one whose name carries no extra
 /// qualifier beyond the tag asked for.
 fn weights(files: &[RepoFile], tag: Option<&str>) -> Vec<RepoFile> {
-    let Some(tag) = tag else {
+    let Some(needle) = tag_needle(tag) else {
         return Vec::new();
     };
-    let needle = format!("-{}", tag.to_ascii_lowercase());
 
-    let candidates: Vec<&RepoFile> = files
+    let candidates: Vec<(String, RepoFile)> = files
         .iter()
-        .filter(|f| !f.is_dir() && f.path.ends_with(".gguf") && !f.is_mmproj() && !f.is_mtp())
-        .filter(|f| {
-            let stem = f.stem().to_ascii_lowercase();
-            // A single file ends with the tag; a split one continues
-            // "-00001-of-00003" after it.
-            stem.ends_with(&needle) || is_split_part(&stem, &needle)
-        })
+        .filter(|f| !f.is_dir() && is_weight_file(&f.path))
+        .filter(|f| matches_tag(f.stem(), &needle))
+        .map(|f| (f.stem().to_string(), f.clone()))
         .collect();
 
-    // Split files share one base name, so keep every part of the winner.
+    keep_shortest_base(candidates, &needle)
+}
+
+/// The tag as it appears inside a file name: `-ud-q4_k_xl`.
+fn tag_needle(tag: Option<&str>) -> Option<String> {
+    let tag = tag?.trim();
+    (!tag.is_empty()).then(|| format!("-{}", tag.to_ascii_lowercase()))
+}
+
+/// A weights file rather than a projector, an MTP head or a README.
+///
+/// Shared with [`snapshot_weights_bytes`], which has only names to go on:
+/// the tree listing and the snapshot directory spell the same repo the same
+/// way, so the two must judge it the same way too.
+fn is_weight_file(path: &str) -> bool {
+    path.ends_with(".gguf") && !looks_like_mmproj(path) && !looks_like_mtp(path)
+}
+
+fn looks_like_mmproj(path: &str) -> bool {
+    path.to_ascii_lowercase().starts_with("mmproj")
+}
+
+fn looks_like_mtp(path: &str) -> bool {
+    path.to_ascii_lowercase().starts_with("mtp")
+}
+
+fn stem_of(path: &str) -> &str {
+    path.strip_suffix(".gguf").unwrap_or(path)
+}
+
+/// A single file ends with the tag; a split one continues
+/// `-00001-of-00003` after it.
+fn matches_tag(stem: &str, needle: &str) -> bool {
+    let stem = stem.to_ascii_lowercase();
+    stem.ends_with(needle) || is_split_part(&stem, needle)
+}
+
+/// Keeps the candidates whose base name is shortest — the build with no
+/// extra qualifier beyond the tag asked for — and every part of it, since
+/// the parts of a split file share one base name.
+fn keep_shortest_base<T>(candidates: Vec<(String, T)>, needle: &str) -> Vec<T> {
     let shortest = candidates
         .iter()
-        .map(|f| base_name(f.stem(), &needle).len())
+        .map(|(stem, _)| base_name(stem, needle).len())
         .min();
 
     match shortest {
         None => Vec::new(),
         Some(len) => candidates
             .into_iter()
-            .filter(|f| base_name(f.stem(), &needle).len() == len)
-            .cloned()
+            .filter(|(stem, _)| base_name(stem, needle).len() == len)
+            .map(|(_, value)| value)
             .collect(),
     }
 }
@@ -469,8 +718,28 @@ number of models in cache: 3
         let cached = parse_cache_list(CACHE_LIST);
 
         assert_eq!(cached.len(), 3);
-        assert_eq!(cached[0], "unsloth/gemma-4-12B-it-qat-GGUF:Q4_K_XL");
-        assert!(!cached.iter().any(|entry| entry.contains("number of")));
+        assert_eq!(
+            cached[0].reference,
+            "unsloth/gemma-4-12B-it-qat-GGUF:Q4_K_XL"
+        );
+        assert!(!cached
+            .iter()
+            .any(|entry| entry.reference.contains("number of")));
+        // A parse claims nothing about disk: measuring is a separate step,
+        // and an unmeasured entry must not read as an empty one.
+        assert!(cached.iter().all(|entry| entry.bytes.is_none()));
+    }
+
+    /// Two quantisations of one repo share a blobs directory, so they share
+    /// a size — which the UI has to be able to say rather than implying the
+    /// disk holds it twice.
+    #[test]
+    fn entries_from_the_same_repo_know_they_share_a_directory() {
+        let cached = parse_cache_list(CACHE_LIST);
+        let other = CachedModel::from("unsloth/gemma-4-12B-it-qat-GGUF:Q8_0");
+
+        assert!(cached[0].same_repo(&other));
+        assert!(!cached[0].same_repo(&cached[1]));
     }
 
     #[test]
@@ -490,6 +759,159 @@ number of models in cache: 3
             availability("unsloth/gemma-4-12B-it-qat-GGUF:UD-Q4_K_XL", &cached),
             Availability::Local
         );
+    }
+
+    /// A scratch directory of this test's own. The thread id is in the
+    /// name as well as the pid because tests run in parallel, and two of
+    /// them sharing a fixture directory is a failure that moves about
+    /// between runs.
+    fn scratch(name: &str) -> PathBuf {
+        let dir = std::env::temp_dir().join(format!(
+            "herd-{name}-{}-{:?}",
+            std::process::id(),
+            std::thread::current().id()
+        ));
+        let _ = std::fs::remove_dir_all(&dir);
+        dir
+    }
+
+    /// The blobs are the weights; the snapshot directory beside them is
+    /// symlinks into the same bytes, so a naive walk of the repo would
+    /// report every model twice.
+    #[test]
+    fn a_repo_is_measured_by_its_blobs_and_nothing_else() {
+        let dir = scratch("size");
+        let blobs = dir.join("blobs");
+        std::fs::create_dir_all(&blobs).expect("blobs dir");
+        std::fs::create_dir_all(dir.join("snapshots/main")).expect("snapshot dir");
+        std::fs::write(blobs.join("sha-weights"), vec![0; 1_000]).expect("blob");
+        std::fs::write(dir.join("snapshots/main/weights.gguf"), vec![0; 1_000]).expect("snapshot");
+
+        assert_eq!(repo_bytes(&dir), Some(1_000));
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// A repo that is not on this machine has no size — which is not the
+    /// same as a size of zero, and must not be printed as one.
+    #[test]
+    fn an_unreadable_repo_directory_has_no_size_rather_than_zero() {
+        assert_eq!(repo_bytes(Path::new("/nonexistent/herd/repo")), None);
+    }
+
+    /// A repo cache with a stale revision left behind, which is what this
+    /// machine's `gemma-4-12B-it-qat-GGUF` actually looks like.
+    #[cfg(unix)]
+    fn fake_repo(name: &str) -> PathBuf {
+        use std::os::unix::fs::symlink;
+
+        let dir = scratch(name);
+        let blobs = dir.join("blobs");
+        std::fs::create_dir_all(&blobs).expect("blobs");
+        std::fs::create_dir_all(dir.join("refs")).expect("refs");
+        std::fs::write(dir.join("refs/main"), "rev-current\n").expect("ref");
+
+        for (blob, size) in [
+            ("sha-current", 7_000),
+            ("sha-mmproj", 300),
+            ("sha-stale", 6_000),
+        ] {
+            std::fs::write(blobs.join(blob), vec![0; size]).expect("blob");
+        }
+
+        for (revision, weights) in [("rev-current", "sha-current"), ("rev-stale", "sha-stale")] {
+            let snapshot = dir.join("snapshots").join(revision);
+            std::fs::create_dir_all(&snapshot).expect("snapshot");
+            symlink(
+                blobs.join(weights),
+                snapshot.join("Model-9B-UD-Q4_K_XL.gguf"),
+            )
+            .expect("weights link");
+            symlink(blobs.join("sha-mmproj"), snapshot.join("mmproj-BF16.gguf"))
+                .expect("mmproj link");
+        }
+
+        dir
+    }
+
+    /// The number the Models screen shows is the file llama.cpp would
+    /// open: the current revision's weights, and only those.
+    ///
+    /// The mistake this guards against is summing the blobs instead. A repo
+    /// keeps every revision it has ever fetched, so that would announce a
+    /// model at twice its size — and the projector beside it is not weights
+    /// either.
+    #[cfg(unix)]
+    #[test]
+    fn a_model_is_measured_from_the_current_revision_only() {
+        let dir = fake_repo("weights");
+
+        assert_eq!(
+            snapshot_weights_bytes(&dir, Some("UD-Q4_K_XL")),
+            Some(7_000)
+        );
+        // ...against the disk the whole repo occupies, which is the other
+        // question and the larger number.
+        assert_eq!(repo_bytes(&dir), Some(13_300));
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// A quantisation the repo does not hold has no size here, even though
+    /// the repo is plainly present. Falling back to "some other quant's
+    /// file" would be a confident, specific, wrong number.
+    #[cfg(unix)]
+    #[test]
+    fn a_quantisation_that_is_not_cached_is_not_measured() {
+        let dir = fake_repo("other-quant");
+
+        assert_eq!(snapshot_weights_bytes(&dir, Some("Q8_0")), None);
+        assert_eq!(snapshot_weights_bytes(&dir, None), None);
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// The same measurement, reached the way the UI reaches it: by the ini
+    /// reference, against the cache list.
+    #[test]
+    fn a_measured_entry_is_found_by_repo_and_quantisation() {
+        let cached = vec![CachedModel {
+            weights: Some(7_000),
+            bytes: Some(13_300),
+            ..CachedModel::from("unsloth/gemma-4-12B-it-qat-GGUF:Q4_K_XL")
+        }];
+
+        // The ini spells it `UD-Q4_K_XL`, the cache `Q4_K_XL`.
+        assert_eq!(
+            measured_weights("unsloth/gemma-4-12B-it-qat-GGUF:UD-Q4_K_XL", &cached),
+            Some(7_000)
+        );
+        // A different quantisation of the same repo is a different file,
+        // and this one has not been measured.
+        assert_eq!(
+            measured_weights("unsloth/gemma-4-12B-it-qat-GGUF:Q8_0", &cached),
+            None
+        );
+        assert_eq!(
+            measured_weights("unsloth/Qwen3-14B-GGUF:Q4_K_XL", &cached),
+            None
+        );
+    }
+
+    /// `availability` and `measured_weights` deliberately disagree about a
+    /// repo cached under another tag: the first says "launching will not
+    /// download anything", the second refuses to size a file it has not
+    /// seen. Both are right about their own question.
+    #[test]
+    fn a_repo_under_another_tag_is_available_but_not_measured() {
+        let cached = vec![CachedModel {
+            weights: Some(7_000),
+            ..CachedModel::from("unsloth/Qwen3-14B-GGUF:Q4_K_XL")
+        }];
+        let asked = "unsloth/Qwen3-14B-GGUF:Q8_0";
+
+        assert_eq!(availability(asked, &cached), Availability::Local);
+        assert_eq!(measured_weights(asked, &cached), None);
     }
 
     #[test]
@@ -835,8 +1257,35 @@ number of models in cache: 3
             // An empty cache is legitimate, but every entry must look like
             // a repo reference rather than a stray line of output.
             for entry in &cached {
-                assert!(entry.contains('/'), "not a repo reference: {entry:?}");
-                assert!(!entry.contains("number of"), "header leaked: {entry:?}");
+                let reference = &entry.reference;
+                assert!(reference.contains('/'), "not a repo reference: {entry:?}");
+                assert!(!reference.contains("number of"), "header leaked: {entry:?}");
+            }
+        }
+
+        /// Sizes, against the cache this machine really has.
+        ///
+        /// The two figures must both be there and must not be equal for
+        /// every entry: `weights` is one revision's gguf and `bytes` is
+        /// everything the repo has ever kept, and this machine's
+        /// `gemma-4-12B-it-qat-GGUF` holds two 6.7 GiB copies of the same
+        /// file. A run where they always matched would mean the snapshot
+        /// resolution had silently fallen back to summing blobs.
+        #[tokio::test]
+        #[ignore = "requires llama-server on the PATH and a populated cache"]
+        async fn the_cache_is_measured_per_model_and_per_repo() {
+            let cached = cache_list().await.expect("llama-server --cache-list");
+
+            for entry in &cached {
+                let (Some(weights), Some(disk)) = (entry.weights, entry.bytes) else {
+                    panic!("unmeasured cache entry: {entry:?}");
+                };
+                assert!(weights > 0, "a listed model with no weights: {entry:?}");
+                assert!(
+                    weights <= disk,
+                    "{} claims {weights} bytes of weights in a {disk}-byte repo",
+                    entry.reference
+                );
             }
         }
 
@@ -969,10 +1418,19 @@ number of models in cache: 3
                     file.path
                 );
             }
+            // ...and the count it resolved must be the count we named.
+            //
+            // Two forms, because `hf` phrases it differently depending on
+            // what is already here: "Will download 3 files" on a cold
+            // cache, "Will download 0 files (out of 3)" once they are all
+            // present. Asserting only the first made this test pass or fail
+            // on whether the developer happened to have the model — which
+            // is not what it is here to check.
+            let count = chosen.len();
             assert!(
-                text.contains(&format!("{} files", chosen.len())),
-                "hf resolved a different number of files than the {} named:\n{text}",
-                chosen.len()
+                text.contains(&format!("{count} files"))
+                    || text.contains(&format!("(out of {count})")),
+                "hf resolved a different number of files than the {count} named:\n{text}"
             );
         }
 

@@ -8,24 +8,25 @@ It is a Rust port and expansion of the `llama-launch.js` idea: that script resol
 
 | | Screen | What it does |
 |---|---|---|
-| `1` | **Models** | The presets in the active `models.ini`, with repo, context size, memory estimate, optimisations, capabilities, speculative head and whether the weights are on this machine. Launch with `Enter`, download with `d`, star with `f`, copy the launch command with `y`. The active preset is marked `●` serving, `◐` starting or stopping, `✖` failed. |
-| `2` | **Server** | Lifecycle state, model, endpoint, uptime, and the tail of the process output. |
-| `3` | **Router** | llama-server's built-in multi-model mode: how many models stay resident, how long an idle one survives, and the argv that starts it. |
-| `4` | **Test** | Send a chat completion to the running model and see the reply, when it was sent, the latency, token rate, and llama.cpp's own split of prompt-eval vs generation. |
-| `5` | **Stats** | Session counters — start time, uptime, tokens in/out, throughput — and the memory budget. |
-| `6` | **Settings** | Every `[server]`, `[*]` and per-model key, overridable — kept in `~/.herd_config`. |
-| `7` | **Logs** | Full log history, scrollable, with a position indicator and a scrollbar. |
+| `1` | **Models** | The presets in the active `models.ini`, with repo, context size, memory size, optimisations, capabilities, speculative head and whether the weights are on this machine. Launch with `Enter`, download with `d`, star with `f`, copy the launch command with `y`. The active preset is marked `●` serving, `◐` starting or stopping, `✖` failed. |
+| `2` | **Hub** | What llama.cpp actually has in its cache: every model, its size, what its repo costs on disk, and which preset in this tier uses it. Models no preset names are in **cyan**; `y` copies a `models.ini` stanza for one. |
+| `3` | **Server** | Lifecycle state, model, endpoint, uptime, and the tail of the process output. |
+| `4` | **Router** | llama-server's built-in multi-model mode: how many models stay resident, how long an idle one survives, and the argv that starts it. |
+| `5` | **Test** | Send a chat completion to the running model and see the reply, when it was sent, the latency, token rate, and llama.cpp's own split of prompt-eval vs generation. |
+| `6` | **Stats** | Session counters — start time, uptime, tokens in/out, throughput, time to first token — and the memory budget. |
+| `7` | **Settings** | Every `[server]`, `[*]` and per-model key, overridable — kept in `~/.herd_config`. |
+| `8` | **Logs** | Full log history, scrollable, with a position indicator and a scrollbar. |
 
 ```
-┌HERD 0.2.1────────────┐┌ Models · 32gb · ~/models/32gb/models.ini ────────────────────── 1/8 ┐
+┌HERD 0.5.0────────────┐┌ Models · 32gb · ~/models/32gb/models.ini ────────────────────── 1/8 ┐
 │ ▸ 1 Models           ││   NAME            REPO              RAM     OPT CAPS SPEC   LOCAL   │
-│   2 Server           ││▸★●gemma4-12b      unsloth/gemma-4…  7.7G  qat ud    S  mtp          │
-│   3 Router           ││  ★gemma4-31b      unsloth/gemma-4… 18.3G  qat ud    S  mtp not local│
-│   4 Test             ││   qwen3-coder     unsloth/Qwen3-C… 17.8G  ud moe    C    -          │
-│   5 Stats            ││                                                                     │
-│   6 Settings         ││  RAM 36 GiB · quantisation-aware training · speculative (mtp)       │
-│   7 Logs             ││  j/↓ move · enter launch · s stop · d download · / filter · …      │
-│                      │└─────────────────────────────────────────────────────────────────────┘
+│   2 Hub              ││▸★●gemma4-12b      unsloth/gemma-4…  7.3G  qat ud    S  mtp         █│
+│   3 Server           ││  ★gemma4-31b      unsloth/gemma-4…~18.3G  qat ud    S  mtp not local║
+│   4 Router           ││   qwen3-coder     unsloth/Qwen3-C… 17.5G  ud moe    C    -         ║│
+│   5 Test             ││                                                                     │
+│   6 Stats            ││  RAM 36 GiB · quantisation-aware training · speculative (mtp)       │
+│   7 Settings         ││  j/↓ move · enter launch · s stop · d download · / filter · …      │
+│   8 Logs             │└─────────────────────────────────────────────────────────────────────┘
 │ tier  32gb           │┌ argv preview ─────────────────────────────────────────────── y copy ┐
 │ RAM   36 GiB         ││llama-server \                                                       │
 │                      ││  --host 0.0.0.0 --port 1234 --jinja --ctx-size 32768 \              │
@@ -39,6 +40,12 @@ load-bearing columns are dropped in order — context size, then optimisations,
 then capabilities, then the speculative head — rather than being clipped off the
 right edge where you cannot tell an empty column from a cut-off one. The preset
 name and `LOCAL` are never dropped.
+
+A **scrollbar** appears on the right border when there are more presets than
+rows on screen, and only then: a full-height thumb beside a list that fits would
+imply presets below the fold that do not exist. The `1/8` on the border says
+where the cursor ended up; the bar says how much list is above and below it
+while you hold a page key.
 
 The **key hints do the same thing**. A footer too long for its pane does not
 wrap — its last hints simply disappear off the right edge — so hints are dropped
@@ -76,7 +83,7 @@ Global:
 
 | Key | Action |
 |-----|--------|
-| `1`–`7` | jump to a screen |
+| `1`–`8` | jump to a screen |
 | `c` | choose which `models.ini` to use |
 | `Tab` / `Shift-Tab`, or `→` / `←` | cycle screens |
 | `:` | command bar (power-user escape hatch) |
@@ -100,6 +107,11 @@ Models screen:
 | `t` / `T` | next / previous RAM tier |
 | `c` | open the config picker |
 | `r` | reload `models.ini` from disk |
+
+Hub screen: `j`/`k` move, `y` copies a `models.ini` stanza for the highlighted
+model, `Enter` shows its preset on the Models screen, `r` asks llama.cpp again
+what it has. There is deliberately **no delete key** — see
+[The Hub screen](#the-hub-screen).
 
 Router screen: `j`/`k` move between the two settings, `+`/`-` adjust them,
 `Enter` starts the router with what is on screen, `s` stops it, `r` resets both
@@ -164,6 +176,55 @@ The download itself is delegated to the `hf` CLI, which owns the HuggingFace
 cache layout — the part that must not be got wrong. Progress is *measured* from
 the bytes landing on disk rather than parsed out of anything either downloader
 prints.
+
+## The Hub screen
+
+The Models screen answers "what can this tier launch". The Hub screen answers
+the other half: **what is actually on this machine**, which is not the same
+list. A tier names presets that were never downloaded, and the cache holds
+models no tier names — several gigabytes each, invisible until something runs
+out of disk.
+
+```
+┌ Hub · llama.cpp model cache ────────────────────────────────────────── 1/11 ┐
+│  MODEL                                        SIZE     DISK PRESET          │
+│▸ unsloth/gemma-4-12B-it-qat-GGUF:Q4_K_XL      6.3G    13.1G gemma4-12b      │
+│  unsloth/gemma-4-31B-it-qat-GGUF:Q4_K_XL     16.1G    33.8G gemma4-31b      │
+│  …6-35B-A3B-Claude-4.7-Opus-abliterated:Q4_K 20.2G    21.1G —               │  ← cyan
+│  unsloth/Qwen3-14B-GGUF:Q4_K_XL               8.5G     8.5G qwen-3-14b-inst…│
+│                                                                             │
+│  11 model(s) · 191.1G on disk · 3 not named by this tier (in cyan)          │
+│  j/↓ move · y copy preset · enter show · r refresh                          │
+└─────────────────────────────────────────────────────────────────────────────┘
+```
+
+`SIZE` and `DISK` are different numbers on purpose. `SIZE` is the weights of
+that quantisation in the **current** revision — the file llama.cpp would open.
+`DISK` is everything the repo occupies, which includes every revision it has
+ever fetched: `gemma-4-12B-it-qat-GGUF` above holds two copies of the same 6.3G
+weights, and the 6.8G difference is reclaimable. A `*` on `DISK` means two
+cached quantisations share that directory, so the figure is not one model's
+alone — said rather than divided, because the cache keeps no per-quantisation
+accounting and splitting it would be inventing a number.
+
+**`y` copies a `models.ini` stanza** for the highlighted model:
+
+```ini
+[qwen3-14b]
+hf-repo = unsloth/Qwen3-14B-GGUF:Q4_K_XL
+alias = qwen3-14b
+```
+
+Just the two keys that make a preset launchable — `[*]` already carries the
+context size, the GPU layers and the rest, and a stanza restating them would
+fight the defaults the file is built around. It goes to the clipboard rather
+than into the file: `models.ini` is hand-maintained and commented, and HERD does
+not write to it.
+
+**There is no delete key.** Freeing 17 GiB is not something to offer one
+keystroke away from `j`, and HERD's rule everywhere else is that it does not
+touch what it did not put there — the same reason the Stats screen prints a
+`sysctl` line instead of running it.
 
 ## What a preset is and what it can do
 
@@ -255,6 +316,7 @@ Counters for the current serving session, reset on every launch so they describe
 │  tokens in   48                                            │
 │  tokens out  200                                           │
 │  throughput  50.0 tok/s avg  ·  51.0 last  ·  51.0 best    │
+│  first token 0.42s avg  ·  0.39s last  ·  0.31s best       │
 └────────────────────────────────────────────────────────────┘
 ```
 
@@ -263,23 +325,46 @@ not by averaging the per-request rates — otherwise a slow first request would
 count as much as a fast later one. Figures come from the probes you run on the
 Test screen.
 
+**Time to first token** is the other half of "is this model fast", and the two
+come apart exactly where it matters: a model paging its weights in can generate
+at a perfectly respectable rate and still leave you looking at nothing for four
+seconds, which throughput alone reports as a healthy session. `best` here is the
+*shortest*, unlike the best rate.
+
+It is derived rather than watched: the probe is deliberately non-streaming — the
+same request `test_call.sh` makes, so the two stay comparable — so nothing sees
+the first token arrive. What is known is the whole round trip, measured locally,
+and llama.cpp's own `predicted_ms` for the generation; the difference is
+everything before the first token, which is queueing, prompt ingestion and the
+network. A server that sends no `timings` gets `-` and says so, rather than a
+zero.
+
 ## Sizing and the memory budget
 
-Each preset shows an estimated resident size, and rows the machine cannot hold
-are drawn in **red** (amber for a tight fit):
+Each preset shows its resident size, and rows the machine cannot hold are drawn
+in **red** (amber for a tight fit):
 
 ```
   NAME                   REPO                                CTX    RAM  SPEC
-▸ gemma4-12b             unsloth/gemma-4-12B-it-qat-GG…    32768   7.7G  mtp
-  gemma4-31b             unsloth/gemma-4-31B-it-qat-GG…    32768  18.3G  mtp   ← red on a 16 GiB machine
-  qwen36-35b             unsloth/Qwen3.6-35B-A3B-MTP-G…    32768  20.6G  mtp   ← red
+▸ gemma4-12b             unsloth/gemma-4-12B-it-qat-GG…    32768   7.3G  mtp
+  gemma4-31b             unsloth/gemma-4-31B-it-qat-GG…    32768 ~18.3G  mtp   ← red on a 16 GiB machine
+  qwen36-35b             unsloth/Qwen3.6-35B-A3B-MTP-G…    32768  22.3G  mtp   ← red
 ```
 
-The estimate reads the parameter count and quantisation out of the repo name —
-the only sizing information a `models.ini` carries — and adds a fixed runtime
-allowance. A mixture-of-experts name like `35B-A3B` counts as 35B, since every
-expert is resident. **A preset whose name carries no parseable size is never
-flagged**: a wrong red warning is worse than none.
+**A `~` means the number is arithmetic; no `~` means it was measured.** Once the
+weights are in the cache there is a real file to read, so HERD reads it: the
+gguf the current revision would load, plus the same runtime allowance the
+estimate adds, so a measured row and an estimated one mean the same thing and
+can be judged against the same budget. Only a quantisation that is genuinely
+cached counts — a repo you have in Q4 tells you nothing about the size of its
+Q8, and a confident wrong number is worse than an honest estimate.
+
+The estimate, for everything not yet downloaded, reads the parameter count and
+quantisation out of the repo name — the only sizing information a `models.ini`
+carries — and adds the same fixed runtime allowance. A mixture-of-experts name
+like `35B-A3B` counts as 35B, since every expert is resident. **A preset whose
+name carries no parseable size is never flagged**: a wrong red warning is worse
+than none.
 
 ### Choosing a config (`c`)
 
@@ -460,6 +545,7 @@ The `:` bar remains available for anything faster to type than to navigate:
 - `launch <model> [-- extra args]` -> launch a preset, hot-swapping any running one
 - `router [--max N] [--idle S]` -> start llama-server's native router, which loads and unloads models on demand (defaults: `--max 2 --idle 300`)
 - `stop`, `status`, `ping <model>`
+- `cache` -> ask llama.cpp again what it has, after a download or a deletion made outside HERD (also `r` on the Hub screen)
 - `help`, `test`, `scan`, `sh <command>`
 
 ## Test

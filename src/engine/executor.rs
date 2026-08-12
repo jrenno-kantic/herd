@@ -98,6 +98,12 @@ impl Executor {
         if trimmed == "status" {
             return self.spawn_status();
         }
+        // Re-asks llama.cpp what it has. The cache changes underneath herd
+        // — a download from another terminal, a repo deleted to free disk —
+        // and until this existed the only way to see that was to restart.
+        if trimmed == "cache" {
+            return self.spawn_cache_refresh();
+        }
 
         self.spawn_quick(command);
     }
@@ -304,6 +310,28 @@ impl Executor {
             }
 
             guard.complete(summary);
+        });
+    }
+
+    /// The `:cache` command: [`refresh_cache`](Self::refresh_cache) with a
+    /// completion, so the busy flag it set is released and the log says
+    /// what came back.
+    fn spawn_cache_refresh(&self) {
+        let tx = self.tx.clone();
+
+        tokio::spawn(async move {
+            let guard = CompletionGuard::new(tx.clone(), "cache".into());
+
+            let output = match llama::hub::cache_list().await {
+                Ok(cached) => {
+                    let count = cached.len();
+                    let _ = tx.send(UiEvent::CacheList(cached));
+                    format!("{count} model(s) in the llama.cpp cache")
+                }
+                Err(error) => format!("could not read the model cache: {error}"),
+            };
+
+            guard.complete(output);
         });
     }
 

@@ -1,6 +1,7 @@
 pub mod command_bar;
 pub mod confirm;
 pub mod help;
+pub mod hub;
 pub mod logs;
 pub mod models;
 pub mod picker;
@@ -13,6 +14,8 @@ pub mod status;
 pub mod test;
 
 use ratatui::layout::Rect;
+use ratatui::widgets::{Scrollbar, ScrollbarOrientation, ScrollbarState};
+use ratatui::Frame;
 
 /// Every screen indents its footer by two spaces.
 const INDENT: usize = 2;
@@ -57,9 +60,93 @@ pub fn position(cursor: usize, len: usize) -> String {
     format!(" {}/{len} ", cursor.min(len - 1) + 1)
 }
 
+/// Draws the position of a selection list on the right-hand border, beside
+/// the rows it describes.
+///
+/// The `x/y` counter on the border says where the cursor is *after* the
+/// fact; this says how much list lies above and below while a page key is
+/// being held, which is a different question and the one asked more often.
+///
+/// Nothing is drawn when the whole list fits — a full-height thumb over
+/// three rows would imply a list that does not exist — which is also what
+/// the TODO asked for: visible only when the screen is too small to show
+/// everything.
+///
+/// `list_area` is the rows themselves and `border_x` the column the block's
+/// right border occupies, so the bar spans exactly the list and not the
+/// header and footer around it.
+pub fn list_scrollbar(
+    frame: &mut Frame,
+    list_area: Rect,
+    border_x: u16,
+    total: usize,
+    cursor: usize,
+) {
+    let height = list_area.height as usize;
+    if total <= height || height == 0 {
+        return;
+    }
+
+    let mut state =
+        ScrollbarState::new(total - height).position(viewport_top(total, height, cursor));
+
+    frame.render_stateful_widget(
+        Scrollbar::new(ScrollbarOrientation::VerticalRight)
+            // No arrow caps: they would land on the block's corners.
+            .begin_symbol(None)
+            .end_symbol(None),
+        Rect {
+            x: border_x,
+            y: list_area.y,
+            width: 1,
+            height: list_area.height,
+        },
+        &mut state,
+    );
+}
+
+/// The first row a `List` will show, given where the cursor is.
+///
+/// Derived rather than read back, because ratatui owns the offset and does
+/// not expose it — but it is not a guess: the `ListState` is rebuilt from
+/// the cursor every frame (see `models::table`), so ratatui always starts
+/// from offset 0 and scrolls down only as far as it must to bring the
+/// selection into view. That is this expression, and a bar drawn from
+/// anything else would disagree with the rows next to it.
+fn viewport_top(total: usize, height: usize, cursor: usize) -> usize {
+    cursor
+        .saturating_sub(height.saturating_sub(1))
+        .min(total.saturating_sub(height))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// While the selection fits on the first screenful, nothing scrolls.
+    #[test]
+    fn a_cursor_near_the_top_leaves_the_list_where_it_is() {
+        assert_eq!(viewport_top(50, 10, 0), 0);
+        assert_eq!(viewport_top(50, 10, 9), 0);
+    }
+
+    /// Past it, the list scrolls by exactly enough to keep the selection on
+    /// the last row — which is what `List` draws, and so what the bar has
+    /// to describe.
+    #[test]
+    fn a_cursor_past_the_first_screen_scrolls_by_the_difference() {
+        assert_eq!(viewport_top(50, 10, 10), 1);
+        assert_eq!(viewport_top(50, 10, 20), 11);
+    }
+
+    /// The end of the list is the end of the travel: the window must never
+    /// run off the bottom, or the thumb would report scrollback that is not
+    /// there.
+    #[test]
+    fn the_window_stops_at_the_end_of_the_list() {
+        assert_eq!(viewport_top(50, 10, 49), 40);
+        assert_eq!(viewport_top(3, 10, 2), 0, "a list that fits never scrolls");
+    }
 
     #[test]
     fn a_position_is_one_based() {

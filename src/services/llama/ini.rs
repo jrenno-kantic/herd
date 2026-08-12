@@ -128,6 +128,52 @@ pub fn effective_repo(config: &LlamaConfig, model: &str) -> Option<String> {
     None
 }
 
+/// A `[preset]` stanza for a model that is in the cache but not in the
+/// ini, ready to paste into one.
+///
+/// The minimum that makes a preset launchable, and nothing more: `[*]`
+/// already carries the context size, the GPU layers and the rest, and a
+/// stanza that restated them would fight the defaults the file is built
+/// around. It is offered as text on the clipboard rather than appended to
+/// the file, because `models.ini` is hand-maintained and commented and herd
+/// does not write to it — see `overrides.rs` for the same rule.
+pub fn preset_stanza(reference: &str) -> String {
+    let name = preset_name(reference);
+
+    format!("[{name}]\nhf-repo = {reference}\nalias = {name}\n")
+}
+
+/// A preset name derived from a repo reference: `unsloth/Qwen3-14B-GGUF`
+/// becomes `qwen3-14b`.
+///
+/// Lower case with the vendor and the `-GGUF` suffix dropped, matching how
+/// the shipped tiers name their sections. The quantisation is left out: it
+/// is in `hf-repo` on the next line, and a section name is what the user
+/// will type at `:launch`.
+pub fn preset_name(reference: &str) -> String {
+    let repo = super::hub::split_repo(reference).0;
+    let tail = repo.rsplit('/').next().unwrap_or(repo).to_ascii_lowercase();
+    let tail = tail.trim_end_matches("-gguf").trim_end_matches("_gguf");
+
+    let cleaned: String = tail
+        .chars()
+        .map(|c| if c.is_ascii_alphanumeric() { c } else { '-' })
+        .collect();
+
+    // Runs of punctuation collapse rather than becoming a row of dashes.
+    let name = cleaned
+        .split('-')
+        .filter(|part| !part.is_empty())
+        .collect::<Vec<_>>()
+        .join("-");
+
+    if name.is_empty() {
+        "model".to_string()
+    } else {
+        name
+    }
+}
+
 /// The config override from the environment.
 ///
 /// `$OPS_TUI_LLAMA_CONFIG` is still honoured after the rename, because the

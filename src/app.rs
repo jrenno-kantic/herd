@@ -21,6 +21,11 @@ const MAX_LOGS: usize = 500;
 #[derive(Debug, Clone, Copy, Eq, PartialEq)]
 pub enum Screen {
     Models,
+    /// What is actually in llama.cpp's model cache, as against what the
+    /// active tier names. Sits next to Models because it answers the other
+    /// half of the same question — Models lists what this tier can launch,
+    /// Hub lists what this machine has.
+    Hub,
     Server,
     /// llama-server's built-in multi-model mode. Sits next to Server
     /// because it is the same lifecycle seen from the other end — one
@@ -34,8 +39,9 @@ pub enum Screen {
 }
 
 impl Screen {
-    pub const ALL: [Screen; 7] = [
+    pub const ALL: [Screen; 8] = [
         Screen::Models,
+        Screen::Hub,
         Screen::Server,
         Screen::Router,
         Screen::Test,
@@ -47,6 +53,7 @@ impl Screen {
     pub fn label(self) -> &'static str {
         match self {
             Screen::Models => "Models",
+            Screen::Hub => "Hub",
             Screen::Server => "Server",
             Screen::Router => "Router",
             Screen::Test => "Test",
@@ -139,6 +146,28 @@ pub struct ModelRow {
     pub spec: String,
 }
 
+/// One row of the Hub screen: a model llama.cpp has in its cache, whether
+/// the active tier has a preset for it, and what it costs on disk.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct HubRow {
+    /// `repo:quant`, as `--cache-list` spells it.
+    pub reference: String,
+    /// The weights of this quantisation in the current revision.
+    pub weights: Option<u64>,
+    /// Everything the repo occupies, stale revisions and projectors
+    /// included.
+    pub disk: Option<u64>,
+    /// The preset in the active tier that names this repo, if any.
+    /// `None` is what the screen colours: a model taking up disk that
+    /// nothing in this tier can launch.
+    pub preset: Option<String>,
+    /// Another cached entry shares this repo's directory, so `disk` is not
+    /// this model's alone. Said rather than divided: the cache keeps no
+    /// per-quantisation accounting, and splitting it would be inventing a
+    /// number nobody measured.
+    pub shares_disk: bool,
+}
+
 /// One line of the Settings screen. Headers are rendered but not
 /// selectable; the cursor only ever lands on `Entry` rows.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -210,6 +239,16 @@ pub struct SessionStats {
     pub total_latency: std::time::Duration,
     pub last_rate: Option<f64>,
     pub best_rate: Option<f64>,
+    /// Time to first token, over the probes whose server reported enough
+    /// to derive one. Counted separately from `probes` because a server
+    /// that sends no `timings` still answers, and averaging over requests
+    /// that contributed nothing would quietly halve the figure.
+    pub ttft_probes: usize,
+    pub total_ttft: std::time::Duration,
+    pub last_ttft: Option<std::time::Duration>,
+    /// The *fastest* seen, so this one is a minimum where `best_rate` is a
+    /// maximum: a shorter wait is a better one.
+    pub best_ttft: Option<std::time::Duration>,
 }
 
 impl SessionStats {
@@ -230,6 +269,18 @@ impl SessionStats {
         if let Some(rate) = outcome.tokens_per_second {
             self.best_rate = Some(self.best_rate.map_or(rate, |best| best.max(rate)));
         }
+
+        if let Some(ttft) = outcome.ttft() {
+            self.ttft_probes += 1;
+            self.total_ttft += ttft;
+            self.last_ttft = Some(ttft);
+            self.best_ttft = Some(self.best_ttft.map_or(ttft, |best| best.min(ttft)));
+        }
+    }
+
+    /// Mean time to first token across the probes that reported one.
+    pub fn average_ttft(&self) -> Option<std::time::Duration> {
+        (self.ttft_probes > 0).then(|| self.total_ttft / self.ttft_probes as u32)
     }
 
     /// Output tokens per second across every probe of this session, which
@@ -367,10 +418,13 @@ pub struct LauncherState {
     /// Model awaiting confirmation, and what the launcher is asking about.
     pub pending_launch: Option<String>,
     pub confirm: Option<Confirm>,
-    /// What `llama-server --cache-list` last reported. `None` means we
-    /// have not managed to ask, which is why `availability` answers
-    /// `Unknown` rather than "missing" — the same restraint as `Fit`.
-    pub cached: Option<Vec<String>>,
+    /// What `llama-server --cache-list` last reported, with the sizes
+    /// measured off the cache directory. `None` means we have not managed
+    /// to ask, which is why `availability` answers `Unknown` rather than
+    /// "missing" — the same restraint as `Fit`.
+    pub cached: Option<Vec<llama::hub::CachedModel>>,
+    /// Where the Hub screen's cursor is, within [`LauncherState::hub_rows`].
+    pub hub_cursor: usize,
     /// The download in flight, if any.
     pub download: Option<Download>,
     /// Last preset actually launched, remembered across restarts.
@@ -412,6 +466,7 @@ impl LauncherState {
             pending_launch: None,
             confirm: None,
             cached: None,
+            hub_cursor: 0,
             download: None,
             last_launched,
             prompt: llama::api::DEFAULT_PROMPT.to_string(),
@@ -722,12 +777,39 @@ impl LauncherState {
         Budget::new(self.ram_gib.unwrap_or(0) as f64, self.reserved_ratio)
     }
 
-    /// Estimated resident size of a preset, or `None` when its name
-    /// carries no parseable parameter count.
+    /// Resident size of a preset in GiB, or `None` when nothing supports a
+    /// number: no file on disk *and* no parseable name.
     pub fn estimate_gib(&self, name: &str) -> Option<f64> {
-        let config = self.config.as_ref()?;
-        let repo = effective(config, name, &["hf-repo", "hf", "model"])?;
-        memory::estimate_gib(&repo)
+        self.sizing(name).map(|sizing| sizing.gib())
+    }
+
+    /// The same number, saying where it came from.
+    ///
+    /// A preset whose weights are already here is **measured**, not
+    /// guessed: the heuristic reads a parameter count and a bit-width out
+    /// of the repo name and is documented as approximate, but once the file
+    /// exists there is a real size to read and no reason to keep guessing.
+    /// The measurement is the gguf the current revision would load, plus
+    /// the same runtime allowance the estimate adds, so the two columns
+    /// stay comparable row to row.
+    ///
+    /// No I/O happens here: the sizes were measured when `--cache-list` was
+    /// read, and this is a lookup. `estimate_gib` is called once per row per
+    /// frame, and a stat call per row per frame is not free on a machine
+    /// already paging.
+    pub fn sizing(&self, name: &str) -> Option<memory::Sizing> {
+        let repo = self.repo_of(name)?;
+
+        let measured = self
+            .cached
+            .as_ref()
+            .and_then(|cached| llama::hub::measured_weights(&repo, cached))
+            .map(memory::measured_gib);
+
+        match measured {
+            Some(gib) => Some(memory::Sizing::Measured(gib)),
+            None => memory::estimate_gib(&repo).map(memory::Sizing::Estimated),
+        }
     }
 
     /// Does anything on screen advance on its own?
@@ -754,6 +836,79 @@ impl LauncherState {
     pub fn repo_of(&self, name: &str) -> Option<String> {
         let config = self.config.as_ref()?;
         effective(config, name, &["hf-repo", "hf", "model"])
+    }
+
+    /// Everything llama.cpp has in its cache, and what the active tier
+    /// makes of it.
+    ///
+    /// Empty until `--cache-list` has answered, which is the same restraint
+    /// `availability` shows: an empty list is what a machine with no models
+    /// looks like, and claiming that before asking would be a lie in the
+    /// one direction that costs a re-download.
+    pub fn hub_rows(&self) -> Vec<HubRow> {
+        let Some(cached) = self.cached.as_ref() else {
+            return Vec::new();
+        };
+
+        // Every preset's repo once, so the lookup below is not quadratic in
+        // a tier with a dozen presets and a cache with a dozen models.
+        let presets: Vec<(String, String)> = self
+            .model_names()
+            .into_iter()
+            .filter_map(|name| self.repo_of(&name).map(|repo| (repo, name)))
+            .collect();
+
+        cached
+            .iter()
+            .map(|entry| HubRow {
+                reference: entry.reference.clone(),
+                weights: entry.weights,
+                disk: entry.bytes,
+                // Matched on the repo, the same rule `availability` uses: a
+                // tier that names the repo is using what is in it, whatever
+                // tag either side spells it with.
+                preset: presets
+                    .iter()
+                    .find(|(repo, _)| {
+                        llama::hub::split_repo(repo)
+                            .0
+                            .eq_ignore_ascii_case(entry.repo())
+                    })
+                    .map(|(_, name)| name.clone()),
+                shares_disk: cached.iter().filter(|other| other.same_repo(entry)).count() > 1,
+            })
+            .collect()
+    }
+
+    pub fn selected_hub(&self) -> Option<HubRow> {
+        self.hub_rows().get(self.hub_cursor).cloned()
+    }
+
+    fn clamp_hub_cursor(&mut self) {
+        let len = self.hub_rows().len();
+        if len == 0 {
+            self.hub_cursor = 0;
+        } else if self.hub_cursor >= len {
+            self.hub_cursor = len - 1;
+        }
+    }
+
+    /// Disk held by the cache, counting each repo once.
+    ///
+    /// Once, because two quantisations of one repo report the same
+    /// directory total — summing the rows would double it, which is exactly
+    /// the mistake the `shares_disk` flag exists to avoid making on screen.
+    pub fn hub_disk_bytes(&self) -> u64 {
+        let Some(cached) = self.cached.as_ref() else {
+            return 0;
+        };
+
+        let mut seen: BTreeSet<String> = BTreeSet::new();
+        cached
+            .iter()
+            .filter(|entry| seen.insert(entry.repo().to_ascii_lowercase()))
+            .filter_map(|entry| entry.bytes)
+            .sum()
     }
 
     /// Whether the weights are on this machine. `Unknown` until llama.cpp
@@ -1013,6 +1168,9 @@ fn chrome(screen: Screen) -> u16 {
         Screen::Settings => 7 + 6,
         // command bar (3) + status (1) + borders (2) + position footer (1)
         Screen::Logs => 7,
+        // command bar (3) + status (1) + borders (2) + column header (1)
+        // + summary and footer lines (2)
+        Screen::Hub => 9,
         // Two rows to move between, so paging is irrelevant, but the
         // value still has to be sane.
         Screen::Router => 12,
@@ -1143,6 +1301,10 @@ impl App {
             }
             UiEvent::CacheList(cached) => {
                 self.llama.cached = Some(cached);
+                // The Hub screen lists exactly these entries, and a refresh
+                // that finds fewer (a deletion, a tier with less in it)
+                // must not leave its cursor pointing past the end.
+                self.llama.clamp_hub_cursor();
                 Action::None
             }
             UiEvent::DownloadProgress { model, done, total } => {
@@ -1290,13 +1452,14 @@ impl App {
                 self.mode = Mode::Help;
                 Action::None
             }
-            KeyCode::Char(c @ '1'..='7') => {
+            KeyCode::Char(c @ '1'..='8') => {
                 let index = c as usize - '1' as usize;
                 self.screen = Screen::ALL[index];
                 Action::None
             }
             _ => match self.screen {
                 Screen::Models => self.handle_models_key(key),
+                Screen::Hub => self.handle_hub_key(key),
                 Screen::Server => self.handle_server_key(key),
                 Screen::Router => self.handle_router_key(key),
                 Screen::Test => self.handle_test_key(key),
@@ -1347,6 +1510,80 @@ impl App {
             KeyCode::Char('s') => self.stop_server(),
             _ => Action::None,
         }
+    }
+
+    /// Hub screen: what is in the cache, and what to do about it.
+    ///
+    /// No destructive key. Deleting a 17 GiB repo is not something to offer
+    /// one keystroke away from a movement key, and herd's rule everywhere
+    /// else is that it does not touch what it did not put there — the
+    /// screen prints the path instead, for the user to run `rm -rf` on if
+    /// they mean it, exactly as the Stats screen prints the `sysctl` line.
+    fn handle_hub_key(&mut self, key: KeyEvent) -> Action {
+        if let Some(cursor) = moved(
+            self.llama.hub_cursor,
+            self.llama.hub_rows().len(),
+            key.code,
+            self.page(),
+        ) {
+            self.llama.hub_cursor = cursor;
+            return Action::None;
+        }
+
+        match key.code {
+            KeyCode::Char('y') => self.copy_stanza(),
+            KeyCode::Char('r') => self.run("cache".to_string()),
+            KeyCode::Enter => self.reveal_in_models(),
+            _ => Action::None,
+        }
+    }
+
+    /// Copies a `[preset]` stanza for the highlighted cached model.
+    ///
+    /// This is the whole point of listing the cache: a model that is on the
+    /// machine but in no tier is unusable, and the gap between the two is
+    /// three lines of ini. Copying them beats reading a repo reference off
+    /// a terminal and retyping it — which is where the typo that makes
+    /// llama.cpp fetch a second copy comes from.
+    fn copy_stanza(&mut self) -> Action {
+        let Some(row) = self.llama.selected_hub() else {
+            self.push_log("nothing to copy: the cache list is empty");
+            return Action::None;
+        };
+
+        Action::CopyToClipboard {
+            label: format!("{} preset", llama::ini::preset_name(&row.reference)),
+            text: llama::ini::preset_stanza(&row.reference),
+        }
+    }
+
+    /// Jumps to the highlighted model's preset on the Models screen, where
+    /// everything that acts on a preset already lives. A cached model with
+    /// no preset in this tier has nothing to jump to, and says so rather
+    /// than moving the cursor somewhere arbitrary.
+    fn reveal_in_models(&mut self) -> Action {
+        let Some(row) = self.llama.selected_hub() else {
+            return Action::None;
+        };
+
+        match row.preset.and_then(|preset| {
+            self.llama
+                .rows()
+                .iter()
+                .position(|candidate| candidate.name == preset)
+        }) {
+            Some(index) => {
+                self.llama.cursor = index;
+                self.llama.clamp_settings_cursor();
+                self.screen = Screen::Models;
+            }
+            None => self.push_log(format!(
+                "no preset in this tier names {} — copy a stanza with y",
+                row.reference
+            )),
+        }
+
+        Action::None
     }
 
     /// Router screen: two numbers and the process they would start.
@@ -3600,7 +3837,7 @@ alias = qwen3-coder
             Some("some-other-model".into()),
         )));
         app.update(UiEvent::CacheList(vec![
-            "unsloth/gemma-4-12B-it-qat-GGUF:Q4_K_XL".to_string(),
+            "unsloth/gemma-4-12B-it-qat-GGUF:Q4_K_XL".into(),
         ]));
 
         assert!(app.llama.relaunch_blocked().is_none());
@@ -3622,7 +3859,7 @@ alias = qwen3-coder
             app.llama.selected_model(),
         )));
         app.update(UiEvent::CacheList(vec![
-            "unsloth/gemma-4-12B-it-qat-GGUF:Q4_K_XL".to_string(),
+            "unsloth/gemma-4-12B-it-qat-GGUF:Q4_K_XL".into(),
         ]));
 
         match app.update(key(KeyCode::Enter)) {
@@ -3755,6 +3992,161 @@ alias = qwen3-coder
         assert!(app.llama.capabilities("whatever").is_empty());
     }
 
+    /// A cache entry with a size on it, as `--cache-list` plus the
+    /// measuring pass produces.
+    fn measured(reference: &str, weights: u64, disk: u64) -> llama::hub::CachedModel {
+        llama::hub::CachedModel {
+            weights: Some(weights),
+            bytes: Some(disk),
+            ..llama::hub::CachedModel::from(reference)
+        }
+    }
+
+    /// The size a preset shows is the file on disk once there is one.
+    ///
+    /// The heuristic is documented as approximate and has been wrong by a
+    /// factor of four; the weights are right there and can simply be read.
+    /// The `~` is what says which of the two a row is showing.
+    #[test]
+    fn a_downloaded_preset_is_measured_rather_than_estimated() {
+        let mut app = app_with_sample();
+
+        let estimated = app.llama.sizing("gemma4-12b").expect("a sizeable preset");
+        assert!(!estimated.is_measured());
+        assert!(estimated.label().starts_with('~'), "{}", estimated.label());
+
+        // 8 GiB of weights, in a repo whose disk holds a stale revision too.
+        app.update(UiEvent::CacheList(vec![measured(
+            "unsloth/gemma-4-12B-it-qat-GGUF:Q4_K_XL",
+            8 * 1024 * 1024 * 1024,
+            20 * 1024 * 1024 * 1024,
+        )]));
+
+        let sizing = app.llama.sizing("gemma4-12b").expect("measured");
+        assert!(sizing.is_measured());
+        // The weights plus the same runtime allowance the estimate adds,
+        // so a measured row and an estimated one mean the same thing.
+        assert_eq!(sizing.label(), "9.0G");
+        // ...and the disk usage of the repo is emphatically *not* it.
+        assert!(sizing.gib() < 12.0, "{}", sizing.gib());
+    }
+
+    /// The Hub screen lists the cache and says what this tier makes of it.
+    #[test]
+    fn the_hub_lists_the_cache_and_names_the_presets_that_use_it() {
+        let mut app = app_with_sample();
+        assert!(
+            app.llama.hub_rows().is_empty(),
+            "the cache was listed before llama.cpp answered"
+        );
+
+        app.update(UiEvent::CacheList(vec![
+            measured("unsloth/gemma-4-12B-it-qat-GGUF:Q4_K_XL", 8_000, 20_000),
+            measured("vendor/Nobody-Asked-For-This-GGUF:Q4_K_M", 3_000, 3_000),
+        ]));
+
+        let rows = app.llama.hub_rows();
+        assert_eq!(rows.len(), 2);
+        assert_eq!(rows[0].preset.as_deref(), Some("gemma4-12b"));
+        assert_eq!(
+            rows[1].preset, None,
+            "an unreferenced model claimed a preset"
+        );
+        assert!(!rows[0].shares_disk);
+        // Counted once per repo, so two entries of one repo cannot double
+        // the total.
+        assert_eq!(app.llama.hub_disk_bytes(), 23_000);
+    }
+
+    /// Two quantisations of one repo share a blobs directory, and the
+    /// screen has to say so rather than adding the same disk up twice.
+    #[test]
+    fn two_quantisations_of_one_repo_share_their_disk() {
+        let mut app = app_with_sample();
+        app.update(UiEvent::CacheList(vec![
+            measured("unsloth/Qwen3-14B-GGUF:Q4_K_XL", 8_000, 20_000),
+            measured("unsloth/Qwen3-14B-GGUF:Q8_0", 12_000, 20_000),
+        ]));
+
+        assert!(app.llama.hub_rows().iter().all(|row| row.shares_disk));
+        assert_eq!(
+            app.llama.hub_disk_bytes(),
+            20_000,
+            "the repo was counted twice"
+        );
+    }
+
+    /// The gap between "on this machine" and "in this tier" is three lines
+    /// of ini, and copying them beats retyping a repo reference off a
+    /// terminal — which is where the typo that fetches a second copy comes
+    /// from.
+    #[test]
+    fn y_on_the_hub_copies_a_preset_stanza() {
+        let mut app = app_with_sample();
+        jump(&mut app, Screen::Hub);
+        app.update(UiEvent::CacheList(vec![measured(
+            "unsloth/Qwen3-14B-GGUF:Q4_K_XL",
+            8_000,
+            8_000,
+        )]));
+
+        match app.update(ch('y')) {
+            Action::CopyToClipboard { text, .. } => {
+                assert!(text.contains("[qwen3-14b]"), "{text}");
+                assert!(
+                    text.contains("hf-repo = unsloth/Qwen3-14B-GGUF:Q4_K_XL"),
+                    "{text}"
+                );
+                assert!(text.contains("alias = qwen3-14b"), "{text}");
+            }
+            other => panic!("expected a clipboard copy, got {other:?}"),
+        }
+    }
+
+    /// Enter jumps to the preset that names the highlighted model, since
+    /// everything that acts on a preset lives on the Models screen.
+    #[test]
+    fn enter_on_the_hub_reveals_the_preset_on_the_models_screen() {
+        let mut app = app_with_sample();
+        app.update(UiEvent::CacheList(vec![
+            measured("vendor/unreferenced-GGUF:Q4_K_M", 1, 1),
+            measured("unsloth/Qwen3-Coder-30B-A3B-Instruct-GGUF:Q4_K_XL", 1, 1),
+        ]));
+        jump(&mut app, Screen::Hub);
+
+        // The first row is in no tier: there is nothing to reveal, and the
+        // cursor must not move somewhere arbitrary instead.
+        app.update(key(KeyCode::Enter));
+        assert_eq!(app.screen, Screen::Hub);
+
+        app.update(ch('j'));
+        app.update(key(KeyCode::Enter));
+        assert_eq!(app.screen, Screen::Models);
+        assert_eq!(app.llama.selected_model().as_deref(), Some("qwen3-coder"));
+    }
+
+    /// A refresh that finds fewer models must not leave the cursor past
+    /// the end of the list.
+    #[test]
+    fn the_hub_cursor_survives_a_shorter_cache() {
+        let mut app = app_with_sample();
+        app.update(UiEvent::CacheList(vec![
+            measured("a/one-GGUF:Q4_K_M", 1, 1),
+            measured("a/two-GGUF:Q4_K_M", 1, 1),
+        ]));
+        jump(&mut app, Screen::Hub);
+        app.update(ch('G'));
+        assert_eq!(app.llama.hub_cursor, 1);
+
+        app.update(UiEvent::CacheList(vec![measured(
+            "a/one-GGUF:Q4_K_M",
+            1,
+            1,
+        )]));
+        assert_eq!(app.llama.hub_cursor, 0);
+        assert!(app.llama.selected_hub().is_some());
+    }
+
     /// Until llama.cpp has been asked, nothing is claimed. Telling someone
     /// to download a model they already have is the one mistake this
     /// feature can make, so it defaults to silence.
@@ -3771,7 +4163,7 @@ alias = qwen3-coder
     fn the_cache_list_decides_what_is_local() {
         let mut app = app_with_sample();
         app.update(UiEvent::CacheList(vec![
-            "unsloth/gemma-4-12B-it-qat-GGUF:Q4_K_XL".to_string(),
+            "unsloth/gemma-4-12B-it-qat-GGUF:Q4_K_XL".into(),
         ]));
 
         assert_eq!(app.llama.availability("gemma4-12b"), Availability::Local);
@@ -3841,7 +4233,7 @@ alias = qwen3-coder
     fn d_on_an_already_local_preset_does_nothing() {
         let mut app = app_with_sample();
         app.update(UiEvent::CacheList(vec![
-            "unsloth/gemma-4-12B-it-qat-GGUF:Q4_K_XL".to_string(),
+            "unsloth/gemma-4-12B-it-qat-GGUF:Q4_K_XL".into(),
         ]));
 
         assert!(matches!(app.update(ch('d')), Action::None));

@@ -1,8 +1,8 @@
 use crate::{
     app::{App, Mode, Screen},
     components::{
-        command_bar, confirm, help, logs, models, picker, router, server, settings, sidebar, stats,
-        status, test,
+        command_bar, confirm, help, hub, logs, models, picker, router, server, settings, sidebar,
+        stats, status, test,
     },
     layout,
     theme::Theme,
@@ -51,6 +51,7 @@ pub fn render(frame: &mut Frame, app: &App) {
 
     match app.screen {
         Screen::Models => models::render(frame, app, areas.main),
+        Screen::Hub => hub::render(frame, app, areas.main),
         Screen::Server => server::render(frame, app, areas.main),
         Screen::Router => router::render(frame, app, areas.main),
         Screen::Test => test::render(frame, app, areas.main),
@@ -107,7 +108,16 @@ spec-type = draft-mtp
 "#;
 
     fn sample_app() -> App {
-        let path = std::env::temp_dir().join(format!("herd-render-{}.ini", std::process::id()));
+        // The thread id is part of the name, not just the pid: tests run in
+        // parallel, and two of them creating the same path meant one
+        // truncating the file the other was about to read — which surfaces
+        // as a screen with no presets on it and a failure that moves
+        // around between runs.
+        let path = std::env::temp_dir().join(format!(
+            "herd-render-{}-{:?}.ini",
+            std::process::id(),
+            std::thread::current().id()
+        ));
         let mut file = std::fs::File::create(&path).expect("create sample ini");
         file.write_all(SAMPLE_INI.as_bytes()).expect("write ini");
         App::with_config_path(path)
@@ -211,8 +221,17 @@ spec-type = draft-mtp
         app.llama.favorites.insert("gemma4-12b".into());
         app.update(crate::event::UiEvent::Resize { height: 32 });
 
+        // The real cache of the machine this is run on, sizes and all —
+        // the Hub screen is not worth looking at against a fixture.
+        if let Ok(cached) = tokio::runtime::Runtime::new()
+            .expect("runtime")
+            .block_on(crate::services::llama::hub::cache_list())
+        {
+            app.update(crate::event::UiEvent::CacheList(cached));
+        }
+
         for width in [100, 120] {
-            for screen in [Screen::Models, Screen::Router] {
+            for screen in [Screen::Models, Screen::Hub, Screen::Router] {
                 app.screen = screen;
                 println!(
                     "\n=== {screen:?} at {width} ===\n{}",
@@ -302,6 +321,104 @@ spec-type = draft-mtp
         assert!(bar(&long) > 0, "no scrollbar over a 500-line buffer");
     }
 
+    /// Glyphs a ratatui scrollbar draws, track and thumb.
+    fn scrollbar_cells(text: &str) -> usize {
+        text.chars().filter(|c| "█░▐▌".contains(*c)).count()
+    }
+
+    /// The same rule the Logs screen follows: a bar only where there is
+    /// something to scroll. A full-height thumb beside a list that fits
+    /// would imply presets below the fold that do not exist.
+    #[test]
+    fn the_models_table_draws_a_scrollbar_only_when_it_overflows() {
+        let short = sample_app();
+        assert_eq!(
+            scrollbar_cells(&frame_text(&short, 120, 40)),
+            0,
+            "a single preset does not need a scrollbar"
+        );
+
+        let tall = App::with_config_path(shipped("16gb"));
+        assert!(tall.llama.rows().len() > 6, "fixture needs more presets");
+        assert!(
+            scrollbar_cells(&frame_text(&tall, 120, 14)) > 0,
+            "no scrollbar over a list taller than the screen"
+        );
+        assert_eq!(
+            scrollbar_cells(&frame_text(&tall, 120, 40)),
+            0,
+            "the same list drawn in full still got a scrollbar"
+        );
+    }
+
+    /// The Hub screen: what is in the cache, what it costs, and which of
+    /// it this tier cannot launch.
+    #[test]
+    fn the_hub_screen_lists_the_cache_and_flags_what_no_preset_names() {
+        let mut app = sample_app();
+        app.screen = Screen::Hub;
+
+        // Before llama.cpp answers, an empty list is not a claim.
+        assert!(frame_text(&app, 120, 40).contains("asking llama-server"));
+
+        app.update(crate::event::UiEvent::CacheList(vec![
+            crate::services::llama::hub::CachedModel {
+                weights: Some(7_193_575_424),
+                bytes: Some(22_106_570_752),
+                ..crate::services::llama::hub::CachedModel::from(
+                    "unsloth/gemma-4-12B-it-qat-GGUF:Q4_K_XL",
+                )
+            },
+            crate::services::llama::hub::CachedModel {
+                weights: Some(3_800_000_000),
+                bytes: Some(3_800_000_000),
+                ..crate::services::llama::hub::CachedModel::from("vendor/Orphan-4B-GGUF:Q4_K_M")
+            },
+        ]));
+
+        let text = frame_text(&app, 120, 40);
+        assert!(text.contains("gemma-4-12B-it-qat-GGUF:Q4_K_XL"), "{text}");
+        assert!(text.contains("6.7G"), "no model size: {text}");
+        assert!(text.contains("20.6G"), "no disk usage: {text}");
+        assert!(
+            text.contains("gemma4-12b"),
+            "the preset using it is not named: {text}"
+        );
+        assert!(
+            text.contains("1 not named by this tier"),
+            "the unreferenced model is not counted: {text}"
+        );
+        assert!(text.contains("y copy preset"), "no copy hint: {text}");
+    }
+
+    /// The measured size and the estimate are not shown as equally
+    /// certain: the estimate carries a `~`, and once the weights are on
+    /// disk it goes away.
+    #[test]
+    fn the_models_table_marks_an_estimated_size() {
+        let mut app = sample_app();
+        assert!(
+            frame_text(&app, 120, 40).contains('~'),
+            "an estimated size is not marked as one"
+        );
+
+        app.update(crate::event::UiEvent::CacheList(vec![
+            crate::services::llama::hub::CachedModel {
+                weights: Some(7_193_575_424),
+                bytes: Some(7_193_575_424),
+                ..crate::services::llama::hub::CachedModel::from(
+                    "unsloth/gemma-4-12B-it-qat-GGUF:Q4_K_XL",
+                )
+            },
+        ]));
+
+        let text = frame_text(&app, 120, 40);
+        assert!(
+            text.contains("7.7G"),
+            "the measured size is missing: {text}"
+        );
+    }
+
     /// "not local" is the difference between pressing Enter and waiting a
     /// second, and pressing Enter and waiting twenty minutes — so it has to
     /// be visible in the list, not only in a prompt after the fact.
@@ -319,7 +436,7 @@ spec-type = draft-mtp
         );
 
         app.update(crate::event::UiEvent::CacheList(vec![
-            "unsloth/gemma-4-12B-it-qat-GGUF:Q4_K_XL".to_string(),
+            "unsloth/gemma-4-12B-it-qat-GGUF:Q4_K_XL".into(),
         ]));
         assert!(
             !frame_text(&app, 120, 40).contains("not local"),
@@ -453,15 +570,20 @@ spec-type = draft-mtp
     #[test]
     #[ignore = "prints the Models table for inspection"]
     fn show_the_models_table() {
+        // The 16gb tier against this machine's real cache: most of it is
+        // not downloaded, which is the mixture worth looking at — measured
+        // sizes, `~` estimates and "not local" on the same screen.
         let mut app = App::with_config_path(shipped("16gb"));
-        app.update(crate::event::UiEvent::CacheList(vec![
-            "unsloth/gemma-4-12B-it-qat-GGUF:Q4_K_XL".to_string(),
-            "unsloth/Qwen3-14B-GGUF:Q4_K_XL".to_string(),
-        ]));
+        if let Ok(cached) = tokio::runtime::Runtime::new()
+            .expect("runtime")
+            .block_on(crate::services::llama::hub::cache_list())
+        {
+            app.update(crate::event::UiEvent::CacheList(cached));
+        }
 
         for width in [120u16, 100] {
             eprintln!("\n===== {width} columns =====");
-            for line in frame_text(&app, width, 30).lines().take(20) {
+            for line in frame_text(&app, width, 20).lines().take(20) {
                 eprintln!("{line}");
             }
         }

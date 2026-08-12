@@ -208,3 +208,95 @@
       line ends in `…` to say so. The marker is an ellipsis rather than
       "? more" because those six characters cost the Models footer its
       tier key, and `?` is already named in the status bar.
+  
+- [x] Add a right slider in models screen to see the position of the content
+      (visible only if the screen is too small to display all items) →
+      `components::list_scrollbar`, drawn on the right border and only when
+      there are more rows than fit, exactly as asked. The Hub screen uses
+      it too.
+    - It is drawn against the **list rows**, not the whole pane, so the
+      thumb spans what it describes rather than the column header and the
+      two footer lines as well.
+    - The position is `viewport_top`, which *reproduces* what ratatui's
+      `List` does rather than guessing at it: ratatui owns the offset and
+      does not expose it, but the `ListState` is rebuilt from the cursor
+      every frame, so it always starts at 0 and scrolls only as far as it
+      must. A bar derived from anything else would disagree with the rows
+      beside it — which is worse than no bar.
+
+- [x] Add an option to see locally installed HF hub models → **a screen,
+      not an option**: `Hub`, inserted as screen 2, right after Models. The
+      two answer halves of the same question — Models is what this tier can
+      launch, Hub is what this machine has — and the list needs a cursor, a
+      position, a footer and its own keys, which is a screen.
+  - [x] Use colors to identify unreferenced models within the current tier
+        → cyan, and named in the summary line ("3 not named by this tier").
+        Cyan rather than red because it is not an error: a model this tier
+        cannot launch may belong to another tier. Red and amber already
+        mean "too large" and "tight" on a list row.
+  - [x] Add an option to copy to the clipboard the required models.ini
+        content needed to add this model → `y` copies a stanza
+        (`[name]`, `hf-repo`, `alias`). Just those: `[*]` already carries
+        the context size and the rest, and a stanza restating them would
+        fight the defaults the file is built around. To the clipboard,
+        never appended — `models.ini` is hand-maintained and herd does not
+        write to it.
+    - The screen shows **two** sizes, because there are two questions.
+      `SIZE` is the weights llama.cpp would load; `DISK` is everything the
+      repo holds. They are far apart: a repo keeps every revision it has
+      ever fetched, so `gemma-4-12B-it-qat-GGUF` here is 6.3G of model in
+      13.1G of directory. That gap is the reclaimable part, and it is the
+      reason to look at this screen at all.
+    - `*` on `DISK` means two cached quantisations share the directory.
+      Said rather than divided: the cache keeps no per-quantisation
+      accounting, and splitting the total would be inventing a number.
+    - `enter` jumps to the preset that names the model, since everything
+      that acts on a preset already lives on the Models screen. `r` (and
+      `:cache`) re-reads the cache, which changes underneath herd — a
+      download in another terminal, a repo deleted to free space.
+    - **Deliberately no delete key.** Freeing 17 GiB is not something to
+      offer one keystroke away from `j`, and herd does not touch what it
+      did not put there — the same restraint as printing the `sysctl` line
+      on the Stats screen rather than running it.
+    - Inserting a screen renumbered the digits to `1`–`8` again. The tests
+      derive them from `Screen::ALL`, but a *string* in a component does
+      not: "run a test on screen 3" had been pointing at the Router since
+      that screen was inserted. It is derived now, and tested.
+
+- [x] Add Time to First Token (TTFT) in stats → `first token  0.42s avg ·
+      0.39s last · 0.31s best`, next to throughput, because the two come
+      apart exactly where it matters: a model paging its weights in
+      generates at a respectable rate and still shows nothing for four
+      seconds.
+    - **Derived, and it says so.** The probe is non-streaming on purpose
+      (it is `test_call.sh`'s request, so the two stay comparable), so
+      nothing sees the first token arrive. What is known is the round trip,
+      measured locally, and llama.cpp's own `predicted_ms`; the difference
+      is queueing, prompt ingestion and the network — the wait being asked
+      about. A server that sends no `timings` gets `-` and a reason, not a
+      zero.
+    - `best` is the **shortest**, unlike the best rate. Counted over its
+      own probe count, since a server that reports no timings still
+      answers and averaging it in would halve the figure.
+
+- [x] Ensure the displayed models size are correct in models screen →
+      **a downloaded preset is now measured, not estimated**: the gguf of
+      its quantisation in the revision `refs/main` names, resolved through
+      the snapshot symlinks, plus the same runtime allowance the estimate
+      adds so both kinds of row can be judged against the same budget.
+    - The table marks which is which: `~18.3G` is arithmetic on the repo
+      name, `7.3G` is a file that was read. The heuristic has been wrong by
+      a factor of four before (`Q1_0` sized as a Q4) and the two are not
+      worth showing as equally certain.
+    - **Summing the blobs would have been the obvious and wrong fix**: a
+      repo keeps every revision it has fetched, so that announces a 12B
+      model at twice its size. The snapshot names exactly one file.
+    - The quantisation has to match, unlike `availability`, which accepts a
+      repo cached under any tag: sizing a cached Q4 against a preset asking
+      for Q8 would be a confident, specific, wrong number.
+    - **Not done:** a preset that is *not* downloaded is still estimated.
+      The honest fix there is the HuggingFace tree API, which is a network
+      call per row — worth doing only if the estimate proves wrong on a
+      preset someone actually cares about.
+
+- [ ] Add a help command in the command component to display information about all available commands
