@@ -40,6 +40,10 @@ one where letters are shortcuts; every other mode captures text until `Enter` or
 - `ConfirmLaunch` - answering a launch prompt: port in use, too large, or not
   downloaded
 - `ConfirmQuit` - answering "this would abandon work in flight"
+- `ConfirmDelete` - answering "this removes a cached model". Its own mode
+  rather than another launch prompt: every other confirmation asks whether to
+  *start* something, and answering the wrong one of those costs a launch. This
+  one costs the download
 - `Help` - the `?` reference card for keys; any key dismisses it
 - `Commands` - the `:help` listing of what the command bar accepts. Separate
   from `Help` because the two answer different questions — "what does this key
@@ -77,9 +81,15 @@ Models:
 | `r` | reload from disk |
 
 Hub: `y` copies a `models.ini` stanza for the highlighted model, `Enter` reveals
-its preset on the Models screen, `r` asks llama.cpp again what it has. There is
-deliberately **no delete key**: freeing 17 GiB is not something to offer one
-keystroke away from `j`, and herd does not touch what it did not put there.
+its preset on the Models screen, `r` asks llama.cpp again what it has, and `D`
+deletes it from the cache.
+
+`D` is the only destructive key in the program, and is fenced accordingly:
+uppercase because lowercase `d` next door *downloads*; a prompt that states the
+size and names any other quantisation sharing the directory before asking; only
+a lowercase `y` accepts, unlike the launch prompts; and an outright refusal —
+not a warning — for the repo a live server is serving from or a download is
+still writing into.
 
 Router: `j`/`k` move between the two settings, `+`/`-` adjust them, `Enter`
 starts the router with exactly what is on screen, `s` stops it, `r` resets both,

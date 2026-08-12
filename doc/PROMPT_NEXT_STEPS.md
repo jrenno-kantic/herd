@@ -455,6 +455,36 @@ cache de llama.cpp est **mesurable**, il n'a plus à être deviné.
   précédente (`scripts.rs`) avait dérivé — ni `reload`, ni `cache`, et un
   « écran 3 » devenu faux à l'insertion du Router.
 
+## Suppression d'un modèle en cache (2026-08-12)
+
+`D` sur le Hub, **seule touche destructive du programme**. Elle était
+volontairement absente ; ce qui la rend acceptable est le prompt, pas un
+changement d'avis sur le risque. Quatre garde-fous :
+
+- **Majuscule**, parce que `d` en minuscule sur l'écran Models *télécharge* : le
+  même doigt signifiant « récupère ça » sur un écran et « détruis ça » sur le
+  suivant, c'est exactement comme ça qu'un accident arrive. Les majuscules sont
+  déjà les variantes fortes (`Q`, `X`).
+- **Le prompt chiffre avant de demander** : la taille, et toute autre
+  quantisation du même répertoire qui partirait avec (`also_removes`). Un prompt
+  qui emporte un second modèle en silence n'a pas posé la question à laquelle
+  l'utilisateur a répondu.
+- **Seul un `y` minuscule confirme**, contrairement aux prompts de lancement qui
+  acceptent aussi `Y` : une touche majuscule partie toute seule ne doit pas être
+  ce qui détruit un téléchargement.
+- **Deux refus secs**, pas des avertissements : le dépôt qu'un serveur vivant
+  est en train de servir, et celui qu'un téléchargement est en train d'écrire.
+  Aucun des deux n'a de « oui quand même » sensé.
+
+Le chemin est calculé par `repo_dir`, jamais pris dans une saisie, et
+`delete_repo` vérifie encore qu'il est directement sous le répertoire du cache,
+qu'il porte le préfixe `models--` et qu'il existe. Un test lui présente `""`,
+`..` et des traversées, et vérifie qu'un répertoire voisin survit.
+
+Ensuite l'Executor **relit le cache** au lieu de croire sa propre suppression :
+une suppression à moitié réussie apparaît comme une ligne toujours listée,
+plutôt que comme un écran qui contredit le disque en silence.
+
 ## Version à chaque commit (2026-08-12)
 
 `hooks/pre-commit`, installé par `make hooks` (qui pointe `core.hooksPath` sur
@@ -503,10 +533,12 @@ compterait des *builds*, pas des changements.
    embarque donc un mmproj sans le dire et passe pour texte seul. Le correctif
    honnête est de chercher un `mmproj` dans le listing du dépôt, pas de deviner
    plus fort.
-9. **Le Hub ne sait pas libérer.** Il chiffre le disque récupérable (révisions
-   périmées, modèles qu'aucun palier ne nomme) sans rien proposer pour l'effacer
-   — décision assumée, mais un `rm -rf` affiché à copier, comme la ligne
-   `sysctl` de l'écran Stats, serait cohérent avec le reste.
+9. **La suppression retire le dépôt entier, pas une quantisation.** `D` sur le
+   Hub efface `models--<dépôt>` en bloc : le cache ne tient aucune comptabilité
+   par quantisation, et aller extraire des blobs d'un répertoire partagé à la
+   main est le meilleur moyen de le corrompre. Le prompt nomme donc ce qui part
+   avec. Une suppression par quantisation demanderait de reconstruire les liens
+   du snapshot, ce que ni `hf` ni llama.cpp n'exposent.
 
 ## Méthode
 

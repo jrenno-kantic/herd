@@ -151,7 +151,8 @@ const MODELS: &[Binding] = &[
     full(&["r"], "r", "re-read models.ini from disk"),
 ];
 
-/// The cache, as against the tier. There is deliberately no delete key —
+/// The cache, as against the tier. `D` is uppercase because it is the one
+/// destructive key in the program and `d` next door means *download* —
 /// see `App::handle_hub_key`.
 const HUB: &[Binding] = &[
     brief(
@@ -167,6 +168,15 @@ const HUB: &[Binding] = &[
         "show this model's preset on the Models screen",
     ),
     brief(&["r"], "r", "refresh", "ask llama.cpp again what it has"),
+    // Last of the brief bindings deliberately: hints drop from the end,
+    // and a footer too narrow to name a destructive key is a footer that
+    // should be naming the others.
+    brief(
+        &["D"],
+        "D",
+        "delete",
+        "delete this model from the cache — asks first",
+    ),
 ];
 
 const SERVER: &[Binding] = &[

@@ -444,7 +444,42 @@
     - **Kept:** `data/` (llama reference scripts and test fixtures, not
       pre-pivot), and the TODO entries above — this file is a record of
       decisions, so its history stays even where the code has gone.
+
+- [x] ensure doc and specs are up to date → `herd-spec-kit/` was two
       releases stale: it still listed six screens and no Router. Product,
-      UX, architecture, data-model, services, roadmap, layout, theme and
-      plugins are all current, and `spec-kit.yaml` now records which herd
-      version it tracks. README and CLAUDE.md updated alongside.
+      UX, architecture, data-model, services, roadmap, layout and theme are
+      all current, and `spec-kit.yaml` now records which herd version it
+      tracks. README, CLAUDE.md and the French handoff doc updated
+      alongside, and kept current with every change since.
+
+- [x] Add a delete model feature to the hub screen, including a
+      confirmation prompt → `D` on the Hub screen. **The one destructive
+      key in the program**, and it was deliberately absent until now: what
+      makes it reasonable is the prompt asked for here, not a change of
+      mind about the risk. Four fences:
+    - **Uppercase `D`.** Lowercase `d` on the Models screen *downloads* —
+      the same finger meaning "fetch this" on one screen and "destroy
+      this" on the next is how an accident happens. Capitals are already
+      the force variants (`Q`, `X`).
+    - **The prompt states the cost before the question**: the size, and
+      any other cached quantisation in the same directory that goes with
+      it. A prompt that took a second model silently would not have asked
+      the question the user answered.
+    - **Only a lowercase `y` confirms**, unlike the launch prompts which
+      also take `Y`. A slipped shift key must not be what destroys a
+      download.
+    - **Two outright refusals rather than warnings** — the repo a live
+      server is serving from, and one a download is still writing into.
+      Neither has a sensible "yes anyway".
+    - The path is computed by `repo_dir`, never taken from typed text, and
+      checked three ways before anything is unlinked (under the hub, the
+      `models--` prefix, an existing directory). A test drives `""`, `..`
+      and traversals at it and asserts a directory beside the hub survives.
+    - **The whole repo goes, not one quantisation.** The cache keeps no
+      per-quantisation accounting, and picking blobs out of a shared
+      directory by hand is how a cache gets corrupted — so the prompt
+      names what else goes instead of pretending to be surgical.
+    - Afterwards the cache is **re-read** rather than assumed: a removal
+      that half-succeeded shows up as a row still listed, not as a screen
+      quietly disagreeing with the disk.
+- [ ] Add an about command to show an About dialog box

@@ -26,6 +26,7 @@ record of what a project used to be belongs.
   with a size to agree to first and a progress bar while it runs
 - See the other side of that: what the machine holds that no preset in this tier
   names, what each model costs on disk, and the ini stanza that would adopt one
+- Delete one to get the disk back, after a prompt that says what goes with it
 - Launch a preset and watch it move OFF -> STARTING -> SERVING
 - Stop it, and see STOPPING before OFF
 - Run the built-in router instead, with its two numbers on screen rather than
@@ -49,7 +50,9 @@ record of what a project used to be belongs.
   from log wording
 - The user's files are theirs: `models.ini` is never written to
 - Destructive acts are the user's call: herd never kills a process it did not
-  spawn, and never changes a system setting
+  spawn, and never changes a system setting. The one thing it does delete — a
+  cached model, on `D` — states the cost first, takes only a lowercase `y`, and
+  refuses outright while that model is serving or downloading
 - Never warn on a guess: anything that cannot be measured or parsed is reported
   as unknown rather than flagged
 - Prefer a measurement to an estimate, and say which is on screen: once the

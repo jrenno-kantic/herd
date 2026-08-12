@@ -42,7 +42,14 @@ The product. Ten modules:
   quantisation in the revision `refs/main` names (resolved through the snapshot
   symlinks — summing the repo's blobs would count every revision it has ever
   fetched), and per repo, the disk the whole directory occupies. Both are read
-  once per cache refresh
+  once per cache refresh.
+  `delete_repo` is the **only destructive operation in the program**, and is
+  fenced accordingly: the path is computed by `repo_dir` and never taken from
+  user text, and it must sit directly under the hub directory, carry the
+  `models--` prefix and be an existing directory before anything is unlinked.
+  The whole repo goes, not one quantisation — the cache has no per-quantisation
+  accounting, and picking blobs out of a shared directory by hand is how a cache
+  gets corrupted
 - `caps.rs` - what a preset is optimised for (`qat`, `ud`, `moe`) and what it
   can do (vision, speculative, audio, code), read from the repo reference and
   the preset's own keys. Nothing is inferred from vendor knowledge that would

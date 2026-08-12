@@ -78,6 +78,9 @@ pub fn render(frame: &mut Frame, app: &App) {
     if app.mode == Mode::Commands {
         command_help::render(frame, app, frame.area());
     }
+    if app.mode == Mode::ConfirmDelete {
+        confirm::render_delete(frame, app, frame.area());
+    }
 }
 
 impl Drop for TerminalSession {
@@ -399,6 +402,30 @@ spec-type = draft-mtp
             "the unreferenced model is not counted: {text}"
         );
         assert!(text.contains("y copy preset"), "no copy hint: {text}");
+    }
+
+    /// The one destructive prompt in the program has to say what goes,
+    /// how much of it, and that there is no way back.
+    #[test]
+    fn the_delete_prompt_states_the_cost_and_what_goes_with_it() {
+        let mut app = sample_app();
+        app.mode = Mode::ConfirmDelete;
+        app.llama.pending_delete = Some(crate::app::PendingDelete {
+            reference: "unsloth/Qwen3-14B-GGUF:Q4_K_XL".into(),
+            repo: "unsloth/Qwen3-14B-GGUF".into(),
+            bytes: Some(22_106_570_752),
+            also_removes: vec!["unsloth/Qwen3-14B-GGUF:Q8_0".into()],
+        });
+
+        let text = frame_text(&app, 120, 40);
+        assert!(text.contains("Delete cached model"), "{text}");
+        assert!(text.contains("unsloth/Qwen3-14B-GGUF"), "{text}");
+        assert!(text.contains("20.6G"), "no size: {text}");
+        assert!(text.contains("cannot be undone"), "{text}");
+        assert!(
+            text.contains("also removes unsloth/Qwen3-14B-GGUF:Q8_0"),
+            "the second quantisation is not named: {text}"
+        );
     }
 
     /// The measured size and the estimate are not shown as equally
@@ -744,11 +771,18 @@ spec-type = draft-mtp
         }
 
         app.llama.confirm = Some(crate::app::Confirm::PortInUse(1234));
+        app.llama.pending_delete = Some(crate::app::PendingDelete {
+            reference: "vendor/Model-GGUF:Q4_K_M".into(),
+            repo: "vendor/Model-GGUF".into(),
+            bytes: Some(1),
+            also_removes: Vec::new(),
+        });
         for mode in [
             Mode::Help,
             Mode::Commands,
             Mode::Picker,
             Mode::ConfirmLaunch,
+            Mode::ConfirmDelete,
         ] {
             app.mode = mode;
             let _ = frame_text(&app, 20, 6);

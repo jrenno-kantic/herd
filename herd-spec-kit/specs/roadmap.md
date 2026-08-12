@@ -49,6 +49,8 @@ Status as of 2026-08-12 (herd 0.7.0).
   dispatchers are checked against
 - A version number that moves at least a patch level on every commit
   (`hooks/pre-commit`, installed by `make hooks`)
+- Deleting a cached model (`D` on the Hub screen) behind a prompt that states
+  the size and what else in the repo goes with it
 
 ## Next
 

@@ -4,7 +4,7 @@
 
 - `command_input: String`
 - `screen: Screen` - `Models` | `Hub` | `Server` | `Router` | `Test` | `Stats` | `Settings` | `Logs`
-- `mode: Mode` - `Browse` | `Command` | `Filter` | `EditSetting` | `EditPrompt` | `Picker` | `ConfirmLaunch` | `ConfirmQuit` | `Help` | `Commands`
+- `mode: Mode` - `Browse` | `Command` | `Filter` | `EditSetting` | `EditPrompt` | `Picker` | `ConfirmLaunch` | `ConfirmQuit` | `ConfirmDelete` | `Help` | `Commands`
 - `logs: VecDeque<String>` - capped at 500 entries, oldest dropped first
 - `log_scroll: usize` - lines hidden *below* the viewport, so 0 means "follow
   the newest line" and no separate follow flag is needed
@@ -40,6 +40,14 @@
 
 Why the launcher is asking before it launches:
 `PortInUse(u16)` | `TooLarge { estimate, budget }` | `NotDownloaded { repo }`.
+
+## PendingDelete
+
+The cached model awaiting an answer: `reference`, `repo`, `bytes`, and
+`also_removes` — the other cached quantisations in the same repo directory,
+resolved *before* the question is asked. A prompt that says "delete this model?"
+and silently takes a second one with it has not asked the question the user
+answered.
 
 ## Download
 
@@ -204,7 +212,12 @@ and to build a launchable argv.
 
 `None` | `Quit` | `RunCommand(String)` | `ConfigPathChanged(PathBuf)` |
 `RunChat { model, prompt }` | `CopyToClipboard { label, text }` |
+`DeleteModel { reference, repo }` |
 `Download { model, repo, wants, then_launch }`
+
+`DeleteModel` carries the repo rather than a path: the path is computed inside
+`hub::delete_repo`, which is where the fence around it lives, and a path
+travelling through the UI is a path something could rewrite on the way.
 
 ## Command (`commands.rs`)
 

@@ -111,6 +111,11 @@ pub enum Mode {
     /// questions ("what does this key do" against "what can I type"), and
     /// one list of both would bury each in the other.
     Commands,
+    /// About to delete a cached model. Its own mode rather than another
+    /// `Confirm` variant: every other prompt asks whether to *start*
+    /// something, and answering `y` to the wrong one of those costs a
+    /// launch. This one costs the download.
+    ConfirmDelete,
 }
 
 #[derive(Debug, Clone)]
@@ -138,6 +143,14 @@ pub enum Action {
         /// clipboard has actually taken it.
         label: String,
         text: String,
+    },
+    /// Remove a cached model from the hub cache. Carries the repo rather
+    /// than a path: the path is computed inside `hub::delete_repo`, which
+    /// is where the fence around it lives, and a path travelling through
+    /// the UI is a path something could rewrite on the way.
+    DeleteModel {
+        reference: String,
+        repo: String,
     },
     /// Fetch a preset's artifacts, optionally launching it afterwards.
     /// Like `RunChat`, structured rather than a command string: the repo
@@ -344,6 +357,23 @@ pub enum Confirm {
     NotDownloaded { repo: String },
 }
 
+/// A cached model the user has asked to delete, held while the prompt is
+/// up.
+///
+/// Carries what the prompt has to say out loud, resolved *before* the
+/// question is asked rather than after it is answered: how much goes, and
+/// how many other quantisations share the directory and would go with it.
+/// A prompt that says "delete this model?" and silently takes a second one
+/// with it has not asked the question the user answered.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PendingDelete {
+    pub reference: String,
+    pub repo: String,
+    pub bytes: Option<u64>,
+    /// Other cached quantisations in the same repo directory.
+    pub also_removes: Vec<String>,
+}
+
 /// A download in flight, in bytes rather than percent so the bar and the
 /// "2.1G of 6.7G" beside it cannot disagree.
 #[derive(Debug, Clone, PartialEq)]
@@ -441,6 +471,8 @@ pub struct LauncherState {
     pub cached: Option<Vec<llama::hub::CachedModel>>,
     /// Where the Hub screen's cursor is, within [`LauncherState::hub_rows`].
     pub hub_cursor: usize,
+    /// The deletion awaiting an answer, if any.
+    pub pending_delete: Option<PendingDelete>,
     /// The download in flight, if any.
     pub download: Option<Download>,
     /// Last preset actually launched, remembered across restarts.
@@ -483,6 +515,7 @@ impl LauncherState {
             confirm: None,
             cached: None,
             hub_cursor: 0,
+            pending_delete: None,
             download: None,
             last_launched,
             prompt: llama::api::DEFAULT_PROMPT.to_string(),
@@ -1422,6 +1455,7 @@ impl App {
         match self.mode {
             // Both overlays are reference cards, and both close on any key.
             Mode::Help | Mode::Commands => self.handle_help_key(key),
+            Mode::ConfirmDelete => self.handle_delete_key(key),
             Mode::Command => self.handle_command_key(key),
             Mode::Filter => self.handle_filter_key(key),
             Mode::EditSetting => self.handle_edit_key(key),
@@ -1531,11 +1565,12 @@ impl App {
 
     /// Hub screen: what is in the cache, and what to do about it.
     ///
-    /// No destructive key. Deleting a 17 GiB repo is not something to offer
-    /// one keystroke away from a movement key, and herd's rule everywhere
-    /// else is that it does not touch what it did not put there — the
-    /// screen prints the path instead, for the user to run `rm -rf` on if
-    /// they mean it, exactly as the Stats screen prints the `sysctl` line.
+    /// The one destructive key in the program is here, and it is
+    /// **uppercase `D`**. Lowercase `d` on the Models screen *downloads* —
+    /// the opposite act — and moving between two screens where the same
+    /// finger means "fetch this" and "destroy this" is precisely how an
+    /// accident happens. Capitals are already the force variants here
+    /// (`Q`, `X`), so the shift key carries its usual meaning.
     fn handle_hub_key(&mut self, key: KeyEvent) -> Action {
         if let Some(cursor) = moved(
             self.llama.hub_cursor,
@@ -1550,8 +1585,102 @@ impl App {
         match key.code {
             KeyCode::Char('y') => self.copy_stanza(),
             KeyCode::Char('r') => self.run("cache".to_string()),
+            KeyCode::Char('D') => self.ask_delete(),
             KeyCode::Enter => self.reveal_in_models(),
             _ => Action::None,
+        }
+    }
+
+    /// Parks a deletion and asks about it, unless something makes it a bad
+    /// idea outright.
+    ///
+    /// Two refusals rather than warnings, because neither has a sensible
+    /// "yes anyway": pulling the weights out from under a server that is
+    /// serving them, and deleting a directory another process is still
+    /// writing into. Both would leave the machine in a state the user did
+    /// not ask for and herd could not explain afterwards.
+    fn ask_delete(&mut self) -> Action {
+        let Some(row) = self.llama.selected_hub() else {
+            return Action::None;
+        };
+        let repo = llama::hub::split_repo(&row.reference).0.to_string();
+
+        if self.serving_repo().is_some_and(|serving| serving == repo) {
+            self.push_log(format!(
+                "{} is serving from {repo} — stop it before deleting the weights",
+                self.llama.server.model.clone().unwrap_or_default()
+            ));
+            return Action::None;
+        }
+
+        if let Some(download) = &self.llama.download {
+            if self
+                .llama
+                .repo_of(&download.model)
+                .map(|reference| llama::hub::split_repo(&reference).0.to_string())
+                .is_some_and(|downloading| downloading == repo)
+            {
+                self.push_log(format!(
+                    "{repo} is being downloaded — wait for it to finish"
+                ));
+                return Action::None;
+            }
+        }
+
+        // Everything else cached in the same directory goes too, so the
+        // prompt has to name it before the question is answered.
+        let also_removes = self
+            .llama
+            .hub_rows()
+            .into_iter()
+            .filter(|other| {
+                other.reference != row.reference
+                    && llama::hub::split_repo(&other.reference).0 == repo
+            })
+            .map(|other| other.reference)
+            .collect();
+
+        self.llama.pending_delete = Some(PendingDelete {
+            reference: row.reference.clone(),
+            repo,
+            bytes: row.disk,
+            also_removes,
+        });
+        self.mode = Mode::ConfirmDelete;
+
+        Action::None
+    }
+
+    /// The repo the running server is serving from, if it is running.
+    fn serving_repo(&self) -> Option<String> {
+        if !self.llama.server.state.is_live() {
+            return None;
+        }
+        let model = self.llama.server.model.as_deref()?;
+        let reference = self.llama.repo_of(model)?;
+
+        Some(llama::hub::split_repo(&reference).0.to_string())
+    }
+
+    fn handle_delete_key(&mut self, key: KeyEvent) -> Action {
+        let pending = self.llama.pending_delete.take();
+        self.mode = Mode::Browse;
+
+        // Only a lowercase `y`, unlike the launch prompts. Those start
+        // something; this one ends something, and a capital Y arriving
+        // from a slipped shift key should not be what does it.
+        match (key.code, pending) {
+            (KeyCode::Char('y'), Some(pending)) => {
+                self.push_log(format!("deleting {}", pending.repo));
+                Action::DeleteModel {
+                    reference: pending.reference,
+                    repo: pending.repo,
+                }
+            }
+            _ => {
+                self.push_log("delete cancelled");
+                Action::None
+            }
         }
     }
 
@@ -4219,6 +4348,111 @@ alias = qwen3-coder
         app.update(key(KeyCode::Enter));
         assert_eq!(app.screen, Screen::Models);
         assert_eq!(app.llama.selected_model().as_deref(), Some("qwen3-coder"));
+    }
+
+    /// `D` asks before it deletes, and the prompt carries what the modal
+    /// has to say: the repo, the size, and anything sharing the directory.
+    #[test]
+    fn shift_d_on_the_hub_asks_before_deleting() {
+        let mut app = app_with_sample();
+        app.update(UiEvent::CacheList(vec![
+            measured("unsloth/Qwen3-14B-GGUF:Q4_K_XL", 8_000, 20_000),
+            measured("unsloth/Qwen3-14B-GGUF:Q8_0", 12_000, 20_000),
+        ]));
+        jump(&mut app, Screen::Hub);
+
+        assert!(matches!(app.update(ch('D')), Action::None));
+        assert_eq!(app.mode, Mode::ConfirmDelete);
+
+        let pending = app.llama.pending_delete.clone().expect("a pending delete");
+        assert_eq!(pending.repo, "unsloth/Qwen3-14B-GGUF");
+        assert_eq!(pending.bytes, Some(20_000));
+        assert_eq!(
+            pending.also_removes,
+            vec!["unsloth/Qwen3-14B-GGUF:Q8_0".to_string()],
+            "the other quantisation in the same directory is not named"
+        );
+    }
+
+    /// Confirming dispatches the deletion; anything else is a cancel.
+    #[test]
+    fn only_a_lowercase_y_confirms_a_deletion() {
+        let mut app = app_with_sample();
+        app.update(UiEvent::CacheList(vec![measured(
+            "unsloth/Qwen3-14B-GGUF:Q4_K_XL",
+            8_000,
+            8_000,
+        )]));
+        jump(&mut app, Screen::Hub);
+
+        // Anything else cancels — including the capital Y the launch
+        // prompts accept, since a slipped shift key must not be what
+        // destroys a download.
+        for cancel in ['Y', 'n', 'd'] {
+            app.update(ch('D'));
+            assert!(matches!(app.update(ch(cancel)), Action::None), "{cancel}");
+            assert_eq!(app.mode, Mode::Browse);
+            assert!(app.llama.pending_delete.is_none());
+        }
+
+        app.update(ch('D'));
+        match app.update(ch('y')) {
+            Action::DeleteModel { reference, repo } => {
+                assert_eq!(reference, "unsloth/Qwen3-14B-GGUF:Q4_K_XL");
+                assert_eq!(repo, "unsloth/Qwen3-14B-GGUF");
+            }
+            other => panic!("expected a deletion, got {other:?}"),
+        }
+    }
+
+    /// Pulling the weights out from under a running server has no sensible
+    /// "yes anyway", so it is refused rather than confirmed.
+    #[test]
+    fn a_serving_model_is_not_offered_for_deletion() {
+        let mut app = app_with_sample();
+        app.update(UiEvent::CacheList(vec![measured(
+            "unsloth/gemma-4-12B-it-qat-GGUF:Q4_K_XL",
+            8_000,
+            8_000,
+        )]));
+        app.update(UiEvent::LlamaStatus(LlamaSnapshot::new(
+            ServerState::Serving,
+            LauncherMode::Manual,
+            Some("gemma4-12b".into()),
+        )));
+        jump(&mut app, Screen::Hub);
+
+        assert!(matches!(app.update(ch('D')), Action::None));
+        assert_eq!(app.mode, Mode::Browse, "it asked anyway");
+        assert!(app.llama.pending_delete.is_none());
+        assert!(
+            app.logs.iter().any(|line| line.contains("stop it before")),
+            "no reason was given"
+        );
+    }
+
+    /// The same for a directory something is still writing into.
+    #[test]
+    fn a_model_being_downloaded_is_not_offered_for_deletion() {
+        let mut app = app_with_sample();
+        app.update(UiEvent::CacheList(vec![measured(
+            "unsloth/gemma-4-12B-it-qat-GGUF:Q4_K_XL",
+            8_000,
+            8_000,
+        )]));
+        app.update(UiEvent::DownloadProgress {
+            model: "gemma4-12b".into(),
+            done: 1,
+            total: 8_000,
+        });
+        jump(&mut app, Screen::Hub);
+
+        assert!(matches!(app.update(ch('D')), Action::None));
+        assert_eq!(app.mode, Mode::Browse);
+        assert!(app
+            .logs
+            .iter()
+            .any(|line| line.contains("wait for it to finish")));
     }
 
     /// A refresh that finds fewer models must not leave the cursor past

@@ -15,7 +15,7 @@ It is a Rust port and expansion of the `llama-launch.js` idea: that script resol
 | `5` | **Stats** | Session counters — start time, uptime, tokens in/out, throughput, time to first token — and the memory budget. |
 | `6` | **Settings** | Every `[server]`, `[*]` and per-model key, overridable — kept in `~/.herd_config`. |
 | `7` | **Logs** | Full log history, scrollable, with a position indicator and a scrollbar. |
-| `8` | **Hub** | What llama.cpp actually has in its cache: every model, its size, what its repo costs on disk, and which preset in this tier uses it. Models no preset names are in **cyan**; `y` copies a `models.ini` stanza for one. |
+| `8` | **Hub** | What llama.cpp actually has in its cache: every model, its size, what its repo costs on disk, and which preset in this tier uses it. Models no preset names are in **cyan**; `y` copies a `models.ini` stanza for one, `D` deletes one after a confirmation. |
 
 The first seven are the ones a session moves through — browse, launch, watch,
 probe. **Hub sits last** because it is where you go occasionally, to see what
@@ -115,7 +115,7 @@ Models screen:
 
 Hub screen: `j`/`k` move, `y` copies a `models.ini` stanza for the highlighted
 model, `Enter` shows its preset on the Models screen, `r` asks llama.cpp again
-what it has. There is deliberately **no delete key** — see
+what it has, `D` deletes it from the cache after a confirmation — see
 [The Hub screen](#the-hub-screen).
 
 Router screen: `j`/`k` move between the two settings, `+`/`-` adjust them,
@@ -226,10 +226,41 @@ fight the defaults the file is built around. It goes to the clipboard rather
 than into the file: `models.ini` is hand-maintained and commented, and HERD does
 not write to it.
 
-**There is no delete key.** Freeing 17 GiB is not something to offer one
-keystroke away from `j`, and HERD's rule everywhere else is that it does not
-touch what it did not put there — the same reason the Stats screen prints a
-`sysctl` line instead of running it.
+**`D` deletes a cached model**, and it is the only destructive key in HERD. It
+asks first:
+
+```
+┌ Delete cached model ───────────────────────────────────────────────┐
+│                                                                    │
+│  Delete unsloth/Qwen3-14B-GGUF from the model cache?               │
+│  This frees 20.6G and cannot be undone.                            │
+│  It also removes unsloth/Qwen3-14B-GGUF:Q8_0                       │
+│  Re-downloading it later is the only way back.                     │
+│                                                                    │
+│  Delete?   [y] yes   [any other key] cancel                        │
+└────────────────────────────────────────────────────────────────────┘
+```
+
+Four things fence it, because freeing 17 GiB by accident is not a small
+mistake:
+
+- **Uppercase**, since lowercase `d` on the Models screen *downloads* — the
+  same finger meaning "fetch this" on one screen and "destroy this" on the next
+  is how an accident happens.
+- The prompt **states the cost before the question**, including any other
+  quantisation sharing the repo directory that would go with it. The whole repo
+  goes, not one quantisation: the cache keeps no per-quantisation accounting,
+  and picking blobs out of a shared directory by hand is how a cache gets
+  corrupted.
+- **Only a lowercase `y` confirms** — the launch prompts also take `Y`; this one
+  does not, so a slipped shift key is not what destroys a download.
+- It **refuses outright** — rather than asking — for the repo a live server is
+  serving from, or one a download is still writing into. Neither has a sensible
+  "yes anyway".
+
+Afterwards HERD re-reads the cache rather than assuming its own deletion worked,
+so a removal that half-succeeded shows up as a row that is still listed instead
+of a screen quietly disagreeing with the disk.
 
 ## What a preset is and what it can do
 

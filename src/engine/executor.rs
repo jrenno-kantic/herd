@@ -202,6 +202,38 @@ impl Executor {
         });
     }
 
+    /// Removes a cached model, then re-reads the cache.
+    ///
+    /// The refresh is the point: llama.cpp is the authority on what is
+    /// here, so a row disappears because it asked again and got a shorter
+    /// list — not because herd assumed its own deletion worked. A removal
+    /// that half-succeeded therefore shows up as a row that is still
+    /// listed, rather than as a screen that quietly disagrees with the
+    /// disk.
+    ///
+    /// Outside the `running` flag, like the clipboard: it is one directory
+    /// unlink, and the confirmation has already been given.
+    pub fn delete_model(&self, reference: String, repo: String) {
+        let tx = self.tx.clone();
+        let executor = self.clone();
+
+        tokio::spawn(async move {
+            let message = match llama::hub::hub_dir() {
+                None => "no HuggingFace cache directory on this machine".to_string(),
+                Some(hub) => match llama::hub::delete_repo(&hub, &repo).await {
+                    Ok(freed) => format!(
+                        "deleted {reference} — freed {}",
+                        llama::hub::human_bytes(freed)
+                    ),
+                    Err(error) => format!("could not delete {repo}: {error}"),
+                },
+            };
+
+            let _ = tx.send(UiEvent::Log(message));
+            executor.refresh_cache();
+        });
+    }
+
     /// Downloads the artifacts a preset needs, then optionally launches it.
     ///
     /// Progress is *measured*, not parsed: `hf` reports only how many

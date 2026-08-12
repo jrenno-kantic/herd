@@ -688,6 +688,48 @@ pub fn partial_bytes_for(reference: &str) -> u64 {
     partial_bytes(&repo_dir(&hub, split_repo(reference).0))
 }
 
+/// Removes a repo from the hub cache, returning what it freed.
+///
+/// **The only destructive thing herd does**, so it is fenced accordingly.
+/// The path is *computed* from the repo name by [`repo_dir`] and never
+/// taken from anything the user typed, and it is then checked three ways
+/// before anything is unlinked: it must sit directly under the hub
+/// directory, it must carry the hub's own `models--` prefix, and it must
+/// be a directory that exists. A bug upstream — an empty repo name, a
+/// reference with a `..` in it — has to fail those tests rather than hand
+/// `remove_dir_all` something outside the cache.
+///
+/// The whole repo goes, not one quantisation: the cache has no
+/// per-quantisation accounting, and picking blobs out of a shared
+/// directory by hand is how a cache gets corrupted. The caller is expected
+/// to have said so first — see `Confirm::Delete`, which names the other
+/// quantisations that would go with it.
+pub async fn delete_repo(hub: &Path, repo: &str) -> Result<u64, String> {
+    let dir = repo_dir(hub, repo);
+
+    if dir.parent() != Some(hub) {
+        return Err(format!("{} is not in the cache directory", dir.display()));
+    }
+    if !dir
+        .file_name()
+        .and_then(|name| name.to_str())
+        .is_some_and(|name| name.starts_with("models--") && name.len() > "models--".len())
+    {
+        return Err(format!("{} is not a cached model", dir.display()));
+    }
+    if !dir.is_dir() {
+        return Err(format!("{} is not there any more", dir.display()));
+    }
+
+    let freed = repo_bytes(&dir).unwrap_or(0);
+
+    tokio::fs::remove_dir_all(&dir)
+        .await
+        .map_err(|error| format!("could not remove {}: {error}", dir.display()))?;
+
+    Ok(freed)
+}
+
 /// Human-readable size, for a prompt that is asking someone to commit to
 /// a download.
 pub fn human_bytes(bytes: u64) -> String {
@@ -797,6 +839,50 @@ number of models in cache: 3
     #[test]
     fn an_unreadable_repo_directory_has_no_size_rather_than_zero() {
         assert_eq!(repo_bytes(Path::new("/nonexistent/herd/repo")), None);
+    }
+
+    /// Deleting removes the repo and reports what it freed.
+    #[tokio::test]
+    async fn deleting_a_repo_frees_it_and_says_how_much() {
+        let hub = scratch("delete");
+        let dir = repo_dir(&hub, "vendor/Model-GGUF");
+        std::fs::create_dir_all(dir.join("blobs")).expect("blobs");
+        std::fs::write(dir.join("blobs/sha"), vec![0; 4_096]).expect("blob");
+
+        assert_eq!(delete_repo(&hub, "vendor/Model-GGUF").await, Ok(4_096));
+        assert!(!dir.exists(), "the repo survived");
+
+        // ...and a second attempt says so rather than reporting success.
+        assert!(delete_repo(&hub, "vendor/Model-GGUF").await.is_err());
+
+        let _ = std::fs::remove_dir_all(&hub);
+    }
+
+    /// The fence around the only destructive thing herd does.
+    ///
+    /// The path is computed, never taken from user text, but a bug
+    /// upstream — an empty name, a traversal — must fail the checks rather
+    /// than reach `remove_dir_all`. The proof is that the sibling
+    /// directory beside the hub is still there afterwards.
+    #[tokio::test]
+    async fn deletion_refuses_anything_that_is_not_a_cached_model() {
+        let root = scratch("delete-guard");
+        let hub = root.join("hub");
+        let bystander = root.join("precious");
+        std::fs::create_dir_all(&hub).expect("hub");
+        std::fs::create_dir_all(&bystander).expect("bystander");
+        std::fs::write(bystander.join("keep.txt"), b"keep").expect("file");
+
+        for repo in ["", "..", "../precious", "a/../../precious"] {
+            assert!(
+                delete_repo(&hub, repo).await.is_err(),
+                "{repo:?} was not refused"
+            );
+        }
+
+        assert!(bystander.join("keep.txt").is_file(), "a bystander was hit");
+
+        let _ = std::fs::remove_dir_all(&root);
     }
 
     /// A repo cache with a stale revision left behind, which is what this

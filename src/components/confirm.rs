@@ -59,6 +59,66 @@ pub fn render_quit(frame: &mut Frame, app: &App, area: Rect) {
     );
 }
 
+/// The delete prompt: what goes, how much of it, and what goes with it.
+///
+/// Its own modal rather than another `Confirm` variant, because it is the
+/// only prompt in the program whose `y` destroys something. It states the
+/// size, names any other quantisation sharing the directory — a prompt
+/// that took a second model silently would not have asked the question the
+/// user answered — and says outright that it cannot be undone.
+pub fn render_delete(frame: &mut Frame, app: &App, area: Rect) {
+    let Some(pending) = app.llama.pending_delete.as_ref() else {
+        return;
+    };
+
+    let size = pending
+        .bytes
+        .map(crate::services::llama::hub::human_bytes)
+        .unwrap_or_else(|| "an unknown amount".into());
+
+    let mut lines = vec![
+        Line::from(""),
+        Line::styled(
+            format!("  Delete {} from the model cache?", pending.repo),
+            Theme::status_error(),
+        ),
+        Line::styled(
+            format!("  This frees {size} and cannot be undone."),
+            Theme::normal(),
+        ),
+    ];
+
+    for also in &pending.also_removes {
+        lines.push(Line::styled(
+            format!("  It also removes {also}"),
+            Theme::status_starting(),
+        ));
+    }
+
+    lines.push(Line::styled(
+        "  Re-downloading it later is the only way back.".to_string(),
+        Theme::logs(),
+    ));
+    lines.push(Line::from(""));
+    lines.push(Line::styled(
+        "  Delete?   [y] yes   [any other key] cancel".to_string(),
+        Theme::normal(),
+    ));
+
+    let popup = centered(area, 72, (lines.len() + 2) as u16);
+
+    frame.render_widget(Clear, popup);
+    frame.render_widget(
+        Paragraph::new(lines).style(Theme::normal()).block(
+            Block::default()
+                .title(" Delete cached model ")
+                .borders(Borders::ALL)
+                .border_style(Theme::status_error()),
+        ),
+        popup,
+    );
+}
+
 pub fn render(frame: &mut Frame, app: &App, area: Rect) {
     let Some(reason) = app.llama.confirm.as_ref() else {
         return;

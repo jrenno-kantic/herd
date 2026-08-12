@@ -123,6 +123,7 @@ async fn main() -> Result<()> {
                 Action::ConfigPathChanged(path) => executor.set_config_path(path),
                 Action::RunChat { model, prompt } => executor.run_chat(model, prompt),
                 Action::CopyToClipboard { label, text } => executor.copy(label, text),
+                Action::DeleteModel { reference, repo } => executor.delete_model(reference, repo),
                 Action::Download {
                     model,
                     repo,
