@@ -393,8 +393,8 @@ impl Columns {
 
         let mut line = format!(
             "{marker}{:<W_NAME$} {:<width$}",
-            truncate(name, W_NAME),
-            truncate(repo, self.repo),
+            components::truncate(name, W_NAME),
+            components::truncate(repo, self.repo),
             width = self.repo
         );
 
@@ -405,13 +405,13 @@ impl Columns {
             line.push_str(&format!(" {ram:>W_RAM$}"));
         }
         if self.opt {
-            line.push_str(&format!(" {:>W_OPT$}", truncate(opt, W_OPT)));
+            line.push_str(&format!(" {:>W_OPT$}", components::truncate(opt, W_OPT)));
         }
         if self.caps {
-            line.push_str(&format!(" {:>W_CAPS$}", truncate(caps, W_CAPS)));
+            line.push_str(&format!(" {:>W_CAPS$}", components::truncate(caps, W_CAPS)));
         }
         if self.spec {
-            line.push_str(&format!(" {:>W_SPEC$}", truncate(spec, W_SPEC)));
+            line.push_str(&format!(" {:>W_SPEC$}", components::truncate(spec, W_SPEC)));
         }
         line.push_str(&format!(" {local:>W_LOCAL$}"));
 
@@ -506,14 +506,6 @@ fn preview(frame: &mut Frame, app: &App, area: Rect) {
         app.llama.argv_preview(),
         app.llama.preview_scroll,
     );
-}
-
-fn truncate(text: &str, width: usize) -> String {
-    if text.chars().count() <= width {
-        return text.to_string();
-    }
-    let kept: String = text.chars().take(width.saturating_sub(1)).collect();
-    format!("{kept}…")
 }
 
 fn block(title: String) -> Block<'static> {
@@ -673,12 +665,12 @@ mod tests {
 
     #[test]
     fn truncate_keeps_short_text_intact() {
-        assert_eq!(truncate("short", 10), "short");
+        assert_eq!(components::truncate("short", 10), "short");
     }
 
     #[test]
     fn truncate_marks_elided_text() {
-        assert_eq!(truncate("abcdefghij", 5), "abcd…");
+        assert_eq!(components::truncate("abcdefghij", 5), "abcd…");
     }
 
     #[test]

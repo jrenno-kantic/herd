@@ -61,6 +61,8 @@ pub fn render(frame: &mut Frame, app: &App, area: Rect) {
         .get(app.llama.settings_cursor)
         .copied();
 
+    let width = chunks[0].width as usize;
+
     // One item per row, so the list's selection index is an index into
     // `rows` — headers included, which is why they are a two-line item
     // rather than two items.
@@ -71,7 +73,10 @@ pub fn render(frame: &mut Frame, app: &App, area: Rect) {
             SettingRow::Header(text) => {
                 items.push(ListItem::new(vec![
                     Line::from(""),
-                    Line::styled(format!("  {text}"), Theme::command()),
+                    Line::styled(
+                        components::truncate(&format!("  {text}"), width),
+                        Theme::command(),
+                    ),
                 ]));
             }
             SettingRow::Entry {
@@ -109,8 +114,12 @@ pub fn render(frame: &mut Frame, app: &App, area: Rect) {
                     (false, false) => "  ",
                 };
 
+                // Clipped to the pane, with a mark: a value cut by the
+                // terminal instead — `unsloth/gemma-4-12B-it-qat-GGUF:UD-…`
+                // at 80 columns — reads as a value that simply ends there,
+                // which for a setting is worse than saying nothing.
                 items.push(ListItem::new(Line::styled(
-                    format!("{marker}{key:<26} {value}"),
+                    components::truncate(&format!("{marker}{key:<26} {value}"), width),
                     if selected {
                         Theme::selected()
                     } else if override_value.is_some() {
@@ -125,6 +134,25 @@ pub fn render(frame: &mut Frame, app: &App, area: Rect) {
 
     let mut state = ListState::default().with_selected(selected_index);
     frame.render_stateful_widget(List::new(items), chunks[0], &mut state);
+
+    // Counted in rows, not items: a section header is drawn as a blank
+    // line plus a title, so a bar that treated it as one row would sit
+    // a row out for every header above the cursor — up to three here.
+    let heights: Vec<usize> = rows
+        .iter()
+        .map(|row| match row {
+            SettingRow::Header(_) => 2,
+            SettingRow::Entry { .. } => 1,
+        })
+        .collect();
+
+    components::tall_list_scrollbar(
+        frame,
+        chunks[0],
+        area.x + area.width.saturating_sub(1),
+        &heights,
+        selected_index.unwrap_or(0),
+    );
 }
 
 /// Whether a value is a boolean and, if so, which way it is set.

@@ -513,6 +513,30 @@ ajoutée à `UiEvent::Resize`. Le rendu reborne contre le cadre réellement obte
 et un redimensionnement reborne aussi : un terminal plus large replie le même
 argv en moins de lignes.
 
+## Les listes qui débordent : Settings (2026-08-12)
+
+Hub avait déjà sa barre (`list_scrollbar`, arrivée avec l'écran) ; il lui
+manquait un test, elle en a un. Settings n'avait ni l'une ni l'autre moitié.
+
+**La barre doit se compter en lignes, pas en éléments.** Un en-tête de section
+est une ligne vide plus un titre : deux lignes pour un seul `ListItem`. Le
+`list_scrollbar` existant suppose une ligne par élément et aurait décalé le
+curseur d'une ligne par en-tête au-dessus du curseur — trois sur cet écran.
+`tall_list_scrollbar` prend les hauteurs ; `tall_viewport_top` en est la partie
+pure, testée directement, et reproduit la règle de ratatui plutôt que de la
+deviner.
+
+**En largeur aussi.** Une valeur plus longue que le cadre était coupée par le
+terminal — `unsloth/gemma-4-12B-it-qat-GGUF:UD-…` en 80 colonnes se lit comme
+une référence qui s'arrête là. Les lignes sont désormais coupées avec une
+marque, et un test parcourt quatre largeurs.
+
+Au passage : `truncate` était écrit **trois** fois et les copies avaient dérivé
+(l'une sans garde `width == 0`, donc une ellipse d'un caractère pour une colonne
+de largeur nulle — un débordement, pas une coupe). Il n'y en a plus qu'un, dans
+`components`. Celui de Hub coupait par le début, ce qui est le bon choix pour
+une référence de dépôt : il s'appelle `elide_start`.
+
 ## TTFT : trois chiffres, le premier à froid (2026-08-12)
 
 ```

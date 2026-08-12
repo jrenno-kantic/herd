@@ -50,7 +50,14 @@ A **scrollbar** appears on the right border when there are more presets than
 rows on screen, and only then: a full-height thumb beside a list that fits would
 imply presets below the fold that do not exist. The `1/8` on the border says
 where the cursor ended up; the bar says how much list is above and below it
-while you hold a page key.
+while you hold a page key. The Hub and Settings lists carry the same bar, and
+Settings counts it in *rows* rather than entries, since a section header is
+drawn as a blank line plus a title and a thumb that ignored that would sit a row
+out for every header above the cursor.
+
+Rows that are too wide for their pane are **clipped with a `…`** rather than cut
+by the terminal — a setting whose value simply stops at the border reads as a
+value that ends there.
 
 The **key hints do the same thing**. A footer too long for its pane does not
 wrap — its last hints simply disappear off the right edge — so hints are dropped

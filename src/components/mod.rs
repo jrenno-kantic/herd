@@ -218,6 +218,33 @@ pub fn text_scrollbar(frame: &mut Frame, area: Rect, total: usize, height: usize
     );
 }
 
+/// Clips `text` to `width`, marking that it was clipped.
+///
+/// The ellipsis goes on the **end**, which is right for anything read from
+/// the left — a key, a summary, a setting's value. `hub::elide_start` is
+/// the other direction, for a repo reference, which is identified by how
+/// it finishes rather than how it starts.
+///
+/// Letting the terminal clip instead reads as text that simply ends there
+/// — the same dishonesty `Columns::for_width` and
+/// `keys::screen_hint_within` exist to avoid.
+///
+/// Written out three times before this (Models, the command listing, Hub)
+/// and the copies had already drifted: one of them had no `width == 0`
+/// guard and would return a one-character ellipsis for a zero-width
+/// column, which is an overflow rather than a clip.
+pub fn truncate(text: &str, width: usize) -> String {
+    if text.chars().count() <= width {
+        return text.to_string();
+    }
+    if width == 0 {
+        return String::new();
+    }
+
+    let kept: String = text.chars().take(width - 1).collect();
+    format!("{kept}…")
+}
+
 /// Centres a `width` x `height` box inside `area`, clamped so it always
 /// fits even in a very small terminal. Shared by every modal.
 pub fn centered(area: Rect, width: u16, height: u16) -> Rect {
@@ -291,6 +318,64 @@ pub fn list_scrollbar(
     );
 }
 
+/// The same, for a list whose items are **not all one row tall** — the
+/// Settings screen, where a section header is drawn as a blank line plus a
+/// title. Everything is counted in rows: `heights` is one entry per item,
+/// and the returned offset is the first *row* on screen.
+///
+/// Same rule as [`viewport_top`], applied to real heights rather than
+/// assumed ones: ratatui starts at offset 0 and advances an item at a time
+/// until the selected item fits in the pane. Counting a two-row header as
+/// one row would put the thumb a row out for every header above the
+/// cursor, which on this screen is up to three.
+pub fn tall_list_scrollbar(
+    frame: &mut Frame,
+    list_area: Rect,
+    border_x: u16,
+    heights: &[usize],
+    cursor: usize,
+) {
+    let height = list_area.height as usize;
+    let total: usize = heights.iter().sum();
+
+    if total <= height || height == 0 {
+        return;
+    }
+
+    let top = tall_viewport_top(heights, height, cursor);
+    let mut state = ScrollbarState::new(total - height).position(top.min(total - height));
+
+    frame.render_stateful_widget(
+        Scrollbar::new(ScrollbarOrientation::VerticalRight)
+            .begin_symbol(None)
+            .end_symbol(None),
+        Rect {
+            x: border_x,
+            y: list_area.y,
+            width: 1,
+            height: list_area.height,
+        },
+        &mut state,
+    );
+}
+
+/// The first row on screen for a list of variably-tall items, in rows.
+///
+/// Same rule as [`viewport_top`] and derived for the same reason — the
+/// `ListState` is rebuilt from the cursor every frame, so ratatui starts at
+/// offset 0 and advances one *item* at a time until the selected item fits.
+/// Split out from the drawing so it can be asserted on without a terminal.
+fn tall_viewport_top(heights: &[usize], height: usize, cursor: usize) -> usize {
+    let cursor = cursor.min(heights.len().saturating_sub(1));
+    let mut offset = 0;
+
+    while offset < cursor && heights[offset..=cursor].iter().sum::<usize>() > height {
+        offset += 1;
+    }
+
+    heights[..offset].iter().sum()
+}
+
 /// The first row a `List` will show, given where the cursor is.
 ///
 /// Derived rather than read back, because ratatui owns the offset and does
@@ -361,6 +446,28 @@ mod tests {
                 assert!(text.contains(token.as_str()), "{width}: lost {token}");
             }
         }
+    }
+
+    /// The Settings screen's headers are two rows for one item, so the
+    /// offset has to be counted in rows. Counted in items the thumb sits a
+    /// row out for every header above the cursor — three, on that screen.
+    #[test]
+    fn a_tall_items_viewport_counts_rows_not_items() {
+        // header, entry, entry, header, entry, entry
+        let heights = [2, 1, 1, 2, 1, 1];
+
+        // Everything above the fold: no scrolling at all.
+        assert_eq!(tall_viewport_top(&heights, 8, 5), 0);
+
+        // A four-row pane showing the last item: the first header (2 rows)
+        // and the two entries after it have to go, which is 4 rows — not
+        // the 3 an item count would have said.
+        assert_eq!(tall_viewport_top(&heights, 4, 5), 4);
+
+        // The cursor at the top never scrolls, whatever the pane.
+        assert_eq!(tall_viewport_top(&heights, 2, 0), 0);
+        // An out-of-range cursor is clamped rather than panicking.
+        assert_eq!(tall_viewport_top(&heights, 4, 99), 4);
     }
 
     /// A wider pane fits more per line, so it needs fewer of them. This is

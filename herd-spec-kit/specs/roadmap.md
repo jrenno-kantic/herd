@@ -60,6 +60,9 @@ Status as of 2026-08-12 (herd 0.7.7).
 - An argv preview that wraps to its pane and scrolls (`J`/`K`, with a
   scrollbar), instead of clipping a long command at the right edge and the
   bottom with nothing to say it had
+- The Settings list scrolls with a bar of its own, counted in rows so that
+  two-row section headers do not put the thumb out, and its rows are clipped
+  with a mark rather than cut by the terminal
 
 ## Next
 

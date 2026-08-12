@@ -11,7 +11,7 @@
 //! can I type here" and being answered somewhere else, later, is not an
 //! answer.
 
-use crate::{app::App, commands, components::centered, theme::Theme};
+use crate::{app::App, commands, components, components::centered, theme::Theme};
 use ratatui::layout::Rect;
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, Clear, Paragraph};
@@ -101,15 +101,15 @@ fn lines(width: usize) -> Vec<Line<'static>> {
 /// An indented line, cut to the box. The indent is cut too: at a width
 /// below it, even two spaces overflow.
 fn indented(text: &str, width: usize) -> String {
-    truncate(&format!("{}{text}", " ".repeat(INDENT)), width)
+    components::truncate(&format!("{}{text}", " ".repeat(INDENT)), width)
 }
 
 fn row(command: &commands::Command, width: usize) -> Line<'static> {
     // On a terminal narrower than the usage column itself, the usage is
     // what survives: a command you cannot type is not worth describing.
     let column = usage_width().min(width.saturating_sub(INDENT));
-    let usage = truncate(&format!(":{}", command.usage), column);
-    let head = truncate(
+    let usage = components::truncate(&format!(":{}", command.usage), column);
+    let head = components::truncate(
         &format!("{}{usage:<column$}", " ".repeat(INDENT)),
         width.min(INDENT + column),
     );
@@ -120,28 +120,15 @@ fn row(command: &commands::Command, width: usize) -> Line<'static> {
         Span::styled(
             match room {
                 0 => String::new(),
-                room => format!("{}{}", " ".repeat(GAP), truncate(command.summary, room)),
+                room => format!(
+                    "{}{}",
+                    " ".repeat(GAP),
+                    components::truncate(command.summary, room)
+                ),
             },
             Theme::normal(),
         ),
     ])
-}
-
-/// Cuts a summary to the room there is, and says that it did.
-///
-/// Letting the terminal clip it would read as a summary that simply ends
-/// there — the same dishonesty `Columns::for_width` and
-/// `keys::screen_hint_within` exist to avoid.
-fn truncate(text: &str, width: usize) -> String {
-    if text.chars().count() <= width {
-        return text.to_string();
-    }
-    if width == 0 {
-        return String::new();
-    }
-
-    let kept: String = text.chars().take(width.saturating_sub(1)).collect();
-    format!("{kept}…")
 }
 
 #[cfg(test)]

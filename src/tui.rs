@@ -307,7 +307,13 @@ spec-type = draft-mtp
             // looking at a pane the app thinks is a different shape.
             app.update(crate::event::UiEvent::Resize { width, height: 32 });
 
-            for screen in [Screen::Models, Screen::Hub, Screen::Router, Screen::Stats] {
+            for screen in [
+                Screen::Models,
+                Screen::Hub,
+                Screen::Router,
+                Screen::Settings,
+                Screen::Stats,
+            ] {
                 app.screen = screen;
                 println!(
                     "\n=== {screen:?} at {width} ===\n{}",
@@ -431,6 +437,116 @@ spec-type = draft-mtp
         );
         assert_eq!(
             scrollbar_cells(&frame_text(&tall, 120, 40)),
+            0,
+            "the same list drawn in full still got a scrollbar"
+        );
+    }
+
+    /// The Settings rows outnumber the screen on any ordinary terminal —
+    /// `[server]`, `[*]` and the preset's own keys, plus `[mono-focus]`
+    /// when it is on — and the list scrolled with nothing to say how much
+    /// was above or below.
+    #[test]
+    fn the_settings_screen_draws_a_scrollbar_only_when_it_overflows() {
+        let mut app = App::with_config_path(shipped("32gb"));
+        app.screen = Screen::Settings;
+
+        assert!(
+            scrollbar_cells(&frame_text(&app, 120, 16)) > 0,
+            "no scrollbar over settings taller than the screen"
+        );
+        assert_eq!(
+            scrollbar_cells(&frame_text(&app, 120, 60)),
+            0,
+            "a list drawn in full still got a scrollbar"
+        );
+    }
+
+    /// The list scrolls to wherever the cursor is, and the bar is drawn
+    /// beside it the whole way. (What the *thumb position* has to get
+    /// right — that a header is two rows for one item — is asserted
+    /// directly on `tall_viewport_top`, which needs no terminal.)
+    #[test]
+    fn the_settings_list_scrolls_to_the_cursor() {
+        let mut app = App::with_config_path(shipped("32gb"));
+        app.screen = Screen::Settings;
+        app.update(crate::event::UiEvent::Resize {
+            width: 120,
+            height: 16,
+        });
+
+        let last = app
+            .llama
+            .setting_rows()
+            .iter()
+            .filter_map(|row| row.as_entry().map(|(_, _, key, _, _)| key.to_string()))
+            .next_back()
+            .expect("the tier has settings");
+
+        let top = frame_text(&app, 120, 16);
+        assert!(top.contains("[server]"), "not at the top:\n{top}");
+        assert!(!top.contains(&last), "nothing was below the fold:\n{top}");
+
+        app.update(crate::event::UiEvent::Key(crossterm::event::KeyEvent::new(
+            crossterm::event::KeyCode::Char('G'),
+            crossterm::event::KeyModifiers::NONE,
+        )));
+
+        let bottom = frame_text(&app, 120, 16);
+        assert!(
+            bottom.contains(&last),
+            "the last row never showed:\n{bottom}"
+        );
+        assert!(scrollbar_cells(&bottom) > 0, "the bar went away:\n{bottom}");
+    }
+
+    /// A setting's value used to be cut by the terminal at the right
+    /// edge, which reads as a value that ends there — for a repo
+    /// reference or a template argument, a misleading one.
+    #[test]
+    fn no_settings_row_runs_past_its_pane() {
+        let mut app = App::with_config_path(shipped("32gb"));
+        app.screen = Screen::Settings;
+
+        for width in [60, 80, 100, 120] {
+            let text = frame_text(&app, width, 40);
+            for line in text.lines() {
+                assert_eq!(
+                    line.chars().count(),
+                    width as usize,
+                    "a row changed the frame width at {width}"
+                );
+            }
+            // The longest value in this tier is the repo reference; at 80
+            // it cannot fit, so it has to be marked rather than cut.
+            if width <= 80 {
+                assert!(text.contains('…'), "nothing marked as clipped:\n{text}");
+            }
+        }
+    }
+
+    /// The Hub list is the other one that outgrows its pane, and it has
+    /// carried a bar since the screen was added — this pins it.
+    #[test]
+    fn the_hub_screen_draws_a_scrollbar_only_when_it_overflows() {
+        let mut app = sample_app();
+        app.screen = Screen::Hub;
+        app.update(crate::event::UiEvent::CacheList(
+            (0..20)
+                .map(|i| {
+                    crate::services::llama::hub::CachedModel::from(
+                        format!("vendor/model-{i:02}-GGUF:Q4_K_M").as_str(),
+                    )
+                })
+                .collect(),
+        ));
+
+        assert!(
+            scrollbar_cells(&frame_text(&app, 120, 20)) > 0,
+            "no scrollbar over twenty cached models"
+        );
+        assert_eq!(
+            scrollbar_cells(&frame_text(&app, 120, 60)),
             0,
             "the same list drawn in full still got a scrollbar"
         );

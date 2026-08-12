@@ -272,16 +272,16 @@ impl Columns {
 
         let mut line = format!(
             "{marker}{:<width$} {:>W_SIZE$}",
-            truncate(reference, self.reference),
-            truncate(size, W_SIZE),
+            elide_start(reference, self.reference),
+            elide_start(size, W_SIZE),
             width = self.reference
         );
 
         if self.disk {
-            line.push_str(&format!(" {:>W_DISK$}", truncate(disk, W_DISK)));
+            line.push_str(&format!(" {:>W_DISK$}", elide_start(disk, W_DISK)));
         }
         if self.preset {
-            line.push_str(&format!(" {:<W_PRESET$}", truncate(preset, W_PRESET)));
+            line.push_str(&format!(" {:<W_PRESET$}", elide_start(preset, W_PRESET)));
         }
 
         line
@@ -294,7 +294,7 @@ impl Columns {
 /// start is a vendor name repeated on most rows. Cutting the tail off would
 /// leave a column of `unsloth/Qwen3-14B-it-qat-G…` that cannot be told
 /// apart.
-fn truncate(text: &str, width: usize) -> String {
+fn elide_start(text: &str, width: usize) -> String {
     let length = text.chars().count();
     if length <= width {
         return text.to_string();
@@ -432,7 +432,7 @@ mod tests {
     /// is the start that is elided.
     #[test]
     fn a_long_reference_keeps_its_quantisation() {
-        let elided = truncate("unsloth/gemma-4-12B-it-qat-GGUF:Q4_K_XL", 20);
+        let elided = elide_start("unsloth/gemma-4-12B-it-qat-GGUF:Q4_K_XL", 20);
 
         assert_eq!(elided.chars().count(), 20);
         assert!(elided.ends_with("Q4_K_XL"), "{elided}");

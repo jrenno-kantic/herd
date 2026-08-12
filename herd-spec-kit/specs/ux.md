@@ -123,7 +123,9 @@ key is pressed.
 
 Logs: `k`/`j` scroll, `PgUp`/`PgDn` by a page, `g` oldest, `G` back to newest.
 A scrollbar on the right border shows the position, and nothing is drawn when
-the whole buffer fits.
+the whole buffer fits. The Models, Hub and Settings lists carry the same bar
+under the same condition; on Settings it is counted in rows rather than entries,
+because a section header takes two rows for one item.
 
 ## Feedback
 

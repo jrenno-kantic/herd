@@ -647,4 +647,31 @@
       reading the wrong argv.
     - Both preview panes (Models and Router) are now drawn by one function,
       since they answer the same question about two different argvs.
-- [ ] Add right scrolling to Hub and Settings screen (if content is larger than the window)
+- [x] Add right scrolling to Hub and Settings screen (if content is larger
+      than the window) → **Hub already had it** (`components::list_scrollbar`,
+      added with the screen); it had no test, so it has one now. The Settings
+      screen is the one that was missing both halves.
+    - **The bar.** Settings rows outnumber the screen on any ordinary
+      terminal — `[server]`, `[*]`, the preset's own keys, and `[mono-focus]`
+      when it is on — and the list scrolled with nothing to say how much was
+      above or below.
+    - **It had to be counted in rows, not items.** A section header is drawn
+      as a blank line plus a title: two rows for one `ListItem`. The existing
+      `list_scrollbar` assumes one row per item, so it would have put the
+      thumb a row out for every header above the cursor — three of them on
+      this screen. `tall_list_scrollbar` takes the heights;
+      `tall_viewport_top` is the pure part and is asserted on directly, since
+      it reproduces ratatui's own scrolling rule rather than guessing at it.
+    - **Sideways, too.** A value longer than the pane was cut by the terminal
+      — `unsloth/gemma-4-12B-it-qat-GGUF:UD-…` at 80 columns reads as a
+      reference that ends there, which for a setting is worse than saying
+      nothing. Rows are clipped with a mark now, and a test walks four widths
+      and fails if any row changes the frame width.
+    - Along the way: `truncate` had been written out **three** times (Models,
+      the command listing, Hub) and the copies had drifted — one had no
+      `width == 0` guard and returned a one-character ellipsis for a
+      zero-width column, which is an overflow rather than a clip. There is
+      one now, in `components`. Hub's was the *other* direction all along
+      (a repo reference is identified by its end), so it is called
+      `elide_start` rather than sharing a name with a function that does
+      something else.
