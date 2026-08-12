@@ -20,13 +20,21 @@ actually spawns and supervises the process.
   with how many of its presets exceed the memory budget
 - Know which presets are actually downloaded, and fetch the ones that are not —
   with a size to agree to first and a progress bar while it runs
+- See the other side of that: what the machine holds that no preset in this tier
+  names, what each model costs on disk, and the ini stanza that would adopt one
 - Launch a preset and watch it move OFF -> STARTING -> SERVING
 - Stop it, and see STOPPING before OFF
+- Run the built-in router instead, with its two numbers on screen rather than
+  passed as flags nobody can see
 - Send a chat probe to the running model and read the reply, latency and token rate
-- See what the session has done: start time, uptime, tokens in and out, throughput
-- Override a server or model option for this session, without editing the file
+- See what the session has done: start time, uptime, tokens in and out,
+  throughput, and how long the model takes to *start* answering
+- Star the presets worth coming back to, and keep them across restarts
+- Override a server or model option, kept in `~/.herd_config`
 - Override the share of memory reserved for the OS, with a standing caution
+- Copy the exact launch command, or a models.ini stanza, to the clipboard
 - Read the process output while it runs, scrollable, with a position indicator
+- Ask what can be typed, and what a key does, without leaving the screen
 - Quit without losing work in flight, and without leaving a server running
 
 ## Design Principles
@@ -40,6 +48,11 @@ actually spawns and supervises the process.
   spawn, and never changes a system setting
 - Never warn on a guess: anything that cannot be measured or parsed is reported
   as unknown rather than flagged
+- Prefer a measurement to an estimate, and say which is on screen: once the
+  weights are on disk there is a real size to read, and the two are not shown as
+  equally certain
+- Nothing is documented in two places: the keymap, the command list and the
+  columns are data, and the tests check them against the code that runs them
 - Zero latency: the UI thread never blocks on I/O
 - No orphaned processes: quitting always stops the supervised server, and the
   downloader with it

@@ -13,7 +13,7 @@ TARGET_CACHE_DIR ?= $(HOME)/.cache/cargo-targets/$(CARGO_PKG_NAME)
 
 .PHONY: help fmt fmt-check lint lint-fix audit check build build-release run \
         run-release test coverage verify clean setup-target teardown-target \
-        version release release-minor release-major
+        version release release-minor release-major hooks hooks-off
 
 help: ## Show this help.
 	@echo "Usage:"
@@ -74,18 +74,31 @@ run-release: ## Launch the optimized TUI.
 # Releasing
 #########################
 
-# Versioning is deliberately *not* automatic on every release build.
+# The version moves at least a patch level per *commit*, in the
+# `hooks/pre-commit` hook — install it with `make hooks`.
 #
-# A build script that rewrote Cargo.toml would dirty the tree on every
+# Per commit rather than per build, and in a hook rather than in build.rs:
+# a build script that rewrote Cargo.toml would dirty the tree on every
 # `cargo build --release`, invalidate its own fingerprint and rebuild in a
-# loop, and produce version numbers that mean nothing because they count
-# builds rather than releases. So the number is bumped when a release is
-# cut, by asking for one — and every build in between is identified by the
-# commit stamp that `build.rs` bakes in, which is the part that actually
-# distinguishes one binary from another.
+# loop, and would count builds rather than changes. A commit is a discrete
+# act with somewhere to hook into.
+#
+# A commit that already sets a version is left alone, which is what keeps
+# the release targets below meaningful: `make release` bumps deliberately,
+# and the hook does not then add one on top.
 
 version: ## Print the version and the commit this tree would build.
 	@cargo run --quiet -- --version
+
+hooks: ## Install the repo's git hooks (bumps the patch version on each commit).
+	@git config core.hooksPath hooks
+	@chmod +x hooks/*
+	@echo "$(GREEN)✓ core.hooksPath → hooks/$(RESET)"
+	@echo "  every commit now bumps the patch version; HERD_NO_BUMP=1 skips one"
+
+hooks-off: ## Stop using the repo's hooks.
+	@git config --unset core.hooksPath || true
+	@echo "$(YELLOW)core.hooksPath cleared — commits no longer bump the version$(RESET)"
 
 release: ## Cut a patch release: verify, bump, tag, build. VERSION=x.y.z to set it outright.
 	@$(MAKE) --no-print-directory do-release BUMP=patch

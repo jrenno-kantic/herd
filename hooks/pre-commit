@@ -1,0 +1,93 @@
+#!/bin/sh
+#
+# Bumps herd's patch version on every commit.
+#
+# Why here, and not in `build.rs`: a build script that rewrote Cargo.toml
+# would dirty the tree on every `cargo build`, invalidate its own
+# fingerprint and rebuild in a loop, and would count *builds* rather than
+# commits. A commit is a discrete, deliberate act with a natural place to
+# hook into, and this is it.
+#
+# The rule is "at least a patch level per commit":
+#
+#   - a commit that does not touch the version gets +0.0.1 here;
+#   - a commit that already sets one — `make release`, or an edit by hand —
+#     is left alone, so a deliberate 0.6.0 does not land as 0.6.1.
+#
+# Install with `make hooks` (it points core.hooksPath at this directory, so
+# the hook is versioned with the code rather than living unbacked-up in
+# .git/hooks). Skip once with HERD_NO_BUMP=1 git commit ...
+set -e
+
+# An explicit escape hatch, for a commit that genuinely must not move the
+# number — a rebase fixup, say.
+if [ "${HERD_NO_BUMP:-}" = "1" ]; then
+    exit 0
+fi
+
+# A merge commit records someone else's work; its version comes from the
+# branches being merged, not from here.
+if git rev-parse -q --verify MERGE_HEAD >/dev/null 2>&1; then
+    exit 0
+fi
+
+# Nothing to compare against on the very first commit.
+if ! git rev-parse -q --verify HEAD >/dev/null 2>&1; then
+    exit 0
+fi
+
+version_of() {
+    awk -F'"' '/^version = /{print $2; exit}'
+}
+
+staged=$(git show :Cargo.toml 2>/dev/null | version_of || true)
+committed=$(git show HEAD:Cargo.toml 2>/dev/null | version_of || true)
+
+if [ -z "$staged" ]; then
+    exit 0
+fi
+
+if [ "$staged" != "$committed" ]; then
+    echo "herd: version already set to $staged by this commit — left alone"
+    exit 0
+fi
+
+# Staging a file wholesale would sweep up unstaged edits sitting in it,
+# which is the one way a hook like this can commit work nobody chose to
+# commit. Refuse instead of guessing.
+if ! git diff --quiet -- Cargo.toml Cargo.lock 2>/dev/null; then
+    echo "herd: Cargo.toml or Cargo.lock has unstaged changes." >&2
+    echo "      Stage or stash them — the version bump has to stage both," >&2
+    echo "      and it will not drag uncommitted edits in with it." >&2
+    exit 1
+fi
+
+next=$(printf '%s\n' "$staged" | awk -F. 'BEGIN { OFS="." } { print $1, $2, $3 + 1 }')
+
+# The first `version = ` under [package], the same edit `make release`
+# makes.
+sed -i.bak "1,/^version = /s/^version = \".*\"/version = \"$next\"/" Cargo.toml
+rm -f Cargo.toml.bak
+
+# The lock carries the same number for this package. Rewritten directly
+# rather than by running cargo: a hook that compiles is a hook people
+# disable.
+if [ -f Cargo.lock ]; then
+    package=$(awk -F'"' '/^name = /{print $2; exit}' Cargo.toml)
+    awk -v pkg="$package" -v v="$next" '
+        $0 == "name = \"" pkg "\"" {
+            print
+            if ((getline line) > 0) {
+                sub(/^version = ".*"/, "version = \"" v "\"", line)
+                print line
+            }
+            next
+        }
+        { print }
+    ' Cargo.lock >Cargo.lock.tmp
+    mv Cargo.lock.tmp Cargo.lock
+    git add Cargo.lock
+fi
+
+git add Cargo.toml
+echo "herd: version $staged -> $next"

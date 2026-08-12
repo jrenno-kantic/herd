@@ -626,6 +626,27 @@ Shutdown stops the downloader as well as the server, and every step is bounded:
 SIGTERM, then SIGKILL, then giving up. A kill that takes twenty seconds cannot
 make the app hang on exit.
 
+## Versioning
+
+**Every commit moves the version at least a patch level.** That is a git hook,
+installed once:
+
+```bash
+make hooks     # points core.hooksPath at hooks/
+```
+
+`hooks/pre-commit` bumps `Cargo.toml` and `Cargo.lock` and stages both. A commit
+that **already sets a version** is left alone, so `make release` and an edit by
+hand are not bumped on top of; `HERD_NO_BUMP=1 git commit …` skips one, and
+`make hooks-off` stops it entirely. It refuses rather than staging `Cargo.toml`
+wholesale when that file has unstaged edits, since sweeping uncommitted work
+into a commit is the one way a hook like this can do real damage.
+
+Per *commit*, and in a hook rather than in `build.rs`: a build script rewriting
+`Cargo.toml` would dirty the tree on each `cargo build --release`, invalidate
+its own fingerprint and rebuild in a loop, and count builds rather than changes.
+A commit is a discrete, deliberate act with somewhere to hook into.
+
 ## Building a release
 
 ```bash
@@ -634,12 +655,9 @@ make release-minor    # or -major
 VERSION=1.0.0 make release
 ```
 
-It refuses on a dirty tree — a release has to be reproducible from its tag. The
-version is **not** auto-incremented on every release build: a build script
-rewriting `Cargo.toml` would dirty the tree on each `cargo build --release`,
-invalidate its own fingerprint and rebuild in a loop, and produce numbers that
-count builds rather than releases. Individual builds are told apart by the
-commit stamp instead.
+It refuses on a dirty tree — a release has to be reproducible from its tag.
+Because the release commit sets the version itself, the hook leaves it alone,
+so a `make release-minor` really does land as `0.8.0` and not `0.8.1`.
 
 ## Behavior notes
 

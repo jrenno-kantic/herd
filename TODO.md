@@ -331,3 +331,35 @@
     - The overlay sizes itself to its content and elides visibly when the
       terminal is narrower, since a clipped summary reads as one that
       simply ended there.
+
+- [x] increase version number (at least patch level) on every commit →
+      `hooks/pre-commit`, installed with `make hooks` (it points
+      `core.hooksPath` at the versioned `hooks/` directory, so the script
+      lives with the code rather than unbacked-up in `.git/hooks`).
+    - **A hook, not `build.rs`.** A build script rewriting `Cargo.toml`
+      dirties the tree on every build, invalidates its own fingerprint and
+      rebuilds in a loop, and counts builds rather than changes — the
+      reason this was refused when it was asked for as a build-time
+      feature. A commit is a discrete act with somewhere to hook into, so
+      per-commit is the version of the request that works.
+    - **A commit that already sets a version is left alone**, which is
+      what keeps `make release` meaningful: a deliberate 0.8.0 lands as
+      0.8.0, not 0.8.1. `HERD_NO_BUMP=1` skips one, `make hooks-off`
+      stops it.
+    - It **refuses rather than staging `Cargo.toml` wholesale** when that
+      file has unstaged edits: sweeping uncommitted work into a commit is
+      the one way a hook like this does real damage.
+    - The lock is rewritten with awk rather than by running cargo — a hook
+      that compiles is a hook people turn off.
+    - Verified in a throwaway repo before being installed here: bumps an
+      ordinary commit (both files), leaves a deliberate version alone,
+      honours the escape hatch, and refuses the unstaged case.
+
+- [x] set version to 0.7.0 → from 0.5.0, carrying the Hub screen, measured
+      sizes, TTFT, the list scrollbar and `:help`.
+
+- [x] ensure doc and specs are up to date → `herd-spec-kit/` was two
+      releases stale: it still listed six screens and no Router. Product,
+      UX, architecture, data-model, services, roadmap, layout, theme and
+      plugins are all current, and `spec-kit.yaml` now records which herd
+      version it tracks. README and CLAUDE.md updated alongside.

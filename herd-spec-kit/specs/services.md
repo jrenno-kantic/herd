@@ -2,11 +2,11 @@
 
 ## Llama Service (`services/llama/`)
 
-The product. Eight modules:
+The product. Ten modules:
 
 - `ini.rs` - parses `models.ini`, builds llama-server argv as a `Vec<String>`
-  (never a shell string, so no quoting bugs), resolves which config file to use
-  and discovers RAM tiers
+  (never a shell string, so no quoting bugs), resolves which config file to use,
+  discovers RAM tiers, and shapes the `[preset]` stanza the Hub screen copies
 - `process.rs` - `Supervisor` owns one supervised child, streams its
   stdout/stderr as `UiEvent::Log`, and drives the lifecycle state machine.
   Holds the child behind a mutex that must never be locked across an await
@@ -18,12 +18,17 @@ The product. Eight modules:
   shape (`{"data":[{"id":...}]}`) and an Ollama-flavoured one
   (`{"models":[{"name":...}]}`), and only accepting the first reports "no
   models loaded" against a server that is plainly serving one
-- `overrides.rs` - session-only setting overrides, emitted as argv
+- `overrides.rs` - setting overrides, emitted as argv, persisted by `prefs`
+- `prefs.rs` - `~/.herd_config`: favourites, overrides and the router numbers.
+  What the user *chose*, as against `session.rs`, which records where the
+  program *was*. Reading never fails; writing does report failure
 - `session.rs` - remembers only the last tier and preset
-- `memory.rs` - heuristic preset sizing from the repo name, and the memory
-  budget the fit warnings are judged against. An unrecognised quantisation
-  reports *nothing* rather than assuming Q4 — the fallback that did assume it
-  sized a 1-bit model as a 4-bit one, announcing 16.1 GiB for a 3.5 GiB file
+- `memory.rs` - preset sizing and the budget the fit warnings are judged
+  against. **Measured where the weights are on disk** (`Sizing::Measured`), and
+  otherwise a heuristic read off the repo name, marked `~` on screen. An
+  unrecognised quantisation reports *nothing* rather than assuming Q4 — the
+  fallback that did assume it sized a 1-bit model as a 4-bit one, announcing
+  16.1 GiB for a 3.5 GiB file
 - `hub.rs` - is a preset actually on this machine, and what would it cost to
   fetch. Two authorities, deliberately: `llama-server --cache-list` answers
   "is it here?" (llama.cpp has to load the file, and it correctly refuses to
@@ -32,7 +37,12 @@ The product. Eight modules:
   asking the user to agree to. Fetching is delegated to the `hf` CLI, which owns
   the hub cache layout; progress is *measured* off the growing partial blob,
   because `hf` reports only a file count through a pipe and llama-server writes
-  its own partials under a different suffix
+  its own partials under a different suffix.
+  It also **measures what is there**: per model, the weights of that
+  quantisation in the revision `refs/main` names (resolved through the snapshot
+  symlinks — summing the repo's blobs would count every revision it has ever
+  fetched), and per repo, the disk the whole directory occupies. Both are read
+  once per cache refresh
 - `caps.rs` - what a preset is optimised for (`qat`, `ud`, `moe`) and what it
   can do (vision, speculative, audio, code), read from the repo reference and
   the preset's own keys. Nothing is inferred from vendor knowledge that would
@@ -49,9 +59,20 @@ Either llama-server *or* `hf` can be the one downloading — a launch fetches it
 own weights when they are absent — so anything that watches a download has to
 account for both.
 
+## Clipboard Service
+
+`shell_command` (pure: POSIX single-quote form, a deliberately conservative safe
+set, and `''` for the empty token) and `copy` (the I/O). A platform command
+rather than a crate — `pbcopy`, else `wl-copy` / `xclip` / `xsel` — for the same
+reason RAM is read with `sysctl`. Each candidate is tried in turn and the log
+line is written **only once one has taken the text**: a "copied" that was really
+a missing `xclip` is discovered at the paste, which is too late.
+
 ## Script Service
 
-Runs predefined commands and owns the `:help` catalogue.
+Runs the handful of generic commands (`test`, `scan`, `sh`). The command
+*catalogue* moved to `commands.rs`, which is now the only place a command is
+written down — the copy that lived here had drifted from the dispatchers.
 
 ## System Service
 

@@ -1,13 +1,15 @@
 id: herd
 name: HERD
-version: 2.3.0
-date: 2026-08-11
+version: 3.0.0
+date: 2026-08-12
+tracks: herd 0.7.0
 
 description: >
   Terminal launcher for local LLMs. Browse the model presets in a
-  llama-server models.ini, see which are actually on the machine,
-  fetch the ones that are not, launch one, monitor its lifecycle, and
-  override server and model options for the session.
+  llama-server models.ini, see which are actually on the machine and what
+  the machine holds that no preset names, fetch what is missing, launch
+  one, monitor its lifecycle, and override server and model options —
+  kept in ~/.herd_config.
 
 tech:
   language: Rust
@@ -21,3 +23,5 @@ goals:
   - never mutate the user's hand-maintained models.ini
   - non-blocking UI: no I/O on the render path
   - never claim what cannot be measured: unknown is a valid answer
+  - measure rather than estimate wherever the file is already on disk
+  - every commit carries a new version number

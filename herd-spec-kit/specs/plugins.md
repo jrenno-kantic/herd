@@ -21,6 +21,8 @@ Plugin must implement:
 
 ## Note
 
-Until this lands, extension happens by adding a `CommandSpec` to
-`services/scripts.rs` and a dispatch arm in `engine/executor.rs`. See
-`architecture.md` for the three existing dispatch paths.
+Until this lands, extension happens by adding an entry to the table in
+`commands.rs` and a dispatch arm on the path that entry names. See
+`architecture.md` for the three existing dispatch paths — and note that the
+table is not documentation alongside the code but is checked against it: a
+listed command that nothing handles fails the conformance tests.

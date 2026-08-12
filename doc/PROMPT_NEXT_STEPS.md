@@ -17,16 +17,23 @@ supervise réellement le processus.
 Le runner générique d'origine (`help`, `test`, `scan`, `sh`) subsiste en
 dessous, mais ce n'est plus le sujet.
 
-## Les quatre écrans
+## Les huit écrans
 
 | | Écran | Rôle |
 |---|---|---|
 | `1` | Models | Table des presets du `models.ini` actif + aperçu argv en direct |
-| `2` | Server | État du cycle de vie, endpoint, uptime, sortie récente |
-| `3` | Test | Appel de chat sur le modèle chargé : réponse, latence, débit |
-| `4` | Stats | Compteurs de session + budget mémoire |
-| `5` | Settings | Clés `[server]` / `[*]` / par modèle, éditables pour la session |
-| `6` | Logs | Historique complet |
+| `2` | Hub | Ce que llama.cpp a en cache : taille du modèle, disque du dépôt, preset qui l'utilise |
+| `3` | Server | État du cycle de vie, endpoint, uptime, sortie récente |
+| `4` | Router | Mode multi-modèles natif de llama-server + l'argv qu'il lancerait |
+| `5` | Test | Appel de chat sur le modèle chargé : réponse, latence, débit |
+| `6` | Stats | Compteurs de session, temps jusqu'au premier jeton, budget mémoire |
+| `7` | Settings | Clés `[server]` / `[*]` / par modèle, éditables |
+| `8` | Logs | Historique complet |
+
+Les chiffres sont **positionnels** : insérer un écran renumérote les suivants.
+Rien ne doit en coder un en dur — ni un test, ni une chaîne dans un composant.
+`Router` puis `Hub` ont été insérés à côté de l'écran dont ils complètent la
+question ; la renumérotation n'a rien coûté d'autre que cette règle.
 
 ## Cycle de vie
 
@@ -114,12 +121,17 @@ le build 10330). `parse_model_list` accepte les deux. Avec seulement la premièr
 `:status` annonçait « no models currently loaded » face à un serveur qui servait
 manifestement un modèle.
 
-## Overrides de settings : session uniquement
+## Overrides de settings : jamais dans le `models.ini`
 
-Les éditions de l'écran Settings s'appliquent au prochain lancement et sont
-**perdues à la fermeture**. `models.ini` n'est **jamais** réécrit : ces fichiers
-sont maintenus à la main et fortement commentés, et aucun round-tripper ini ne
-préserve fiablement l'emplacement des commentaires.
+Les éditions de l'écran Settings s'appliquent au prochain lancement.
+`models.ini` n'est **jamais** réécrit : ces fichiers sont maintenus à la main et
+fortement commentés, et aucun round-tripper ini ne préserve fiablement
+l'emplacement des commentaires.
+
+Elles ne sont plus perdues à la fermeture pour autant : depuis `prefs.rs`, elles
+sont conservées dans `~/.herd_config` (JSON trié, relisible et éditable à la
+main), avec les favoris et les deux nombres du routeur. **La règle n'a pas
+changé là où elle comptait** : elle portait sur l'*ini*, pas sur l'oubli.
 
 Un override est exactement un override CLI, donc il s'insère dans la chaîne de
 précédence existante sans nouvelle règle dans le moteur :
@@ -128,9 +140,17 @@ précédence existante sans nouvelle règle dans le moteur :
 [server] → [*] → [model] → overrides de session → args CLI explicites
 ```
 
-Seuls le **palier** et le **dernier preset lancé** sont persistés, dans
-`~/.config/herd/session.json`. Ne pas y ajouter les overrides : cela
-contredirait la décision ci-dessus.
+Deux fichiers, deux rôles à ne pas confondre :
+
+- `~/.config/herd/session.json` : **où le programme en était** — le palier et le
+  dernier preset lancé, rien d'autre.
+- `~/.herd_config` : **ce que l'utilisateur a choisi** — favoris, overrides,
+  nombres du routeur. L'écriture y signale ses échecs (contrairement au fichier
+  de session) : perdre le palier est un désagrément, perdre un réglage posé
+  exprès est une perte de travail.
+
+La réservation mémoire (`+`/`-` sur Stats) reste volontairement hors des deux :
+c'est une propriété de la machine du moment, pas un réglage de preset.
 
 ## Le dossier `data/`
 
@@ -203,10 +223,23 @@ face à un serveur lancé hors d'herd.
 
 ## Dimensionnement mémoire (`services/llama/memory.rs`)
 
-`estimate_gib` déduit le nombre de paramètres et la quantisation du **nom du
-dépôt** — la seule information de taille que porte un `models.ini` — puis ajoute
-une allocation forfaitaire pour l'exécution. C'est une heuristique, assumée comme
-telle :
+**Un preset déjà téléchargé est mesuré, plus estimé.** `LauncherState::sizing`
+renvoie `Sizing::Measured` dès que le cache contient ce dépôt *et* cette
+quantisation : le gguf de la révision pointée par `refs/main`, résolu à travers
+les liens du snapshot, plus la même allocation d'exécution que l'estimation —
+les deux lignes restent donc comparables et se jugent contre le même budget. La
+table marque la différence : `7.3G` mesuré, `~18.3G` calculé.
+
+Deux règles rendent la substitution sûre : la quantisation doit correspondre
+(un Q4 en cache ne dit rien de la taille d'un Q8, et un chiffre précis et faux
+est pire qu'une estimation annoncée comme telle), et il ne faut **pas** sommer
+les blobs du dépôt — celui-ci conserve toutes les révisions déjà téléchargées,
+ce qui annoncerait un modèle 12B au double de sa taille.
+
+`estimate_gib` — le repli, pour ce qui n'est pas encore téléchargé — déduit le
+nombre de paramètres et la quantisation du **nom du dépôt**, la seule
+information de taille que porte un `models.ini`, puis ajoute la même allocation
+forfaitaire. C'est une heuristique, assumée comme telle :
 
 - le plus **grand** jeton `<n>B` gagne : un MoE `35B-A3B` compte pour 35B (tous
   les experts sont résidents), pas 3B ;
@@ -217,8 +250,8 @@ telle :
   d'avertissement. Idem si la RAM n'est pas lisible.
 
 `Budget` = RAM installée moins `reserved_ratio` (25 % par défaut, l'ordre de
-grandeur de ce que macOS garde hors du GPU). Session uniquement, comme les autres
-overrides. `+`/`-` sur l'écran Stats avancent par point de pourcentage entier —
+grandeur de ce que macOS garde hors du GPU). Session uniquement, contrairement
+aux autres overrides. `+`/`-` sur l'écran Stats avancent par point de pourcentage entier —
 la valeur est arrondie, sinon un `+= 0.05` répété dérive et n'atteint jamais
 exactement les bornes.
 
@@ -381,6 +414,49 @@ RAM disponible. Le détail des invariants est dans `CLAUDE.md` ; en résumé :
    par 30 s**. Un tick ne redessine plus que si une horloge est à l'écran.
    Essayé puis **annulé** : réduire les features tokio (aucun gain mesurable).
 
+## Cache local, tailles mesurées, TTFT et `:help` (2026-08-12)
+
+Quatre points de la TODO, dont trois s'appuient sur le même fait nouveau : le
+cache de llama.cpp est **mesurable**, il n'a plus à être deviné.
+
+- **Écran Hub** (`2`). Models dit ce que ce palier sait lancer, Hub dit ce que la
+  machine possède, et les deux listes diffèrent dans les deux sens. Colonnes
+  `SIZE` (les poids que llama.cpp chargerait) et `DISK` (tout ce que le dépôt
+  occupe, révisions périmées comprises) : sur cette machine, 6,3G de modèle dans
+  13,1G de répertoire. `*` sur `DISK` = deux quantisations partagent le
+  répertoire, dit plutôt que divisé — le cache ne tient aucune comptabilité par
+  quantisation. Les modèles qu'aucun preset du palier ne nomme sont en cyan
+  (pas en rouge : ce n'est pas une erreur, ils peuvent appartenir à un autre
+  palier). `y` copie une strophe `models.ini` prête à coller. **Aucune touche de
+  suppression, volontairement** : libérer 17 Gio ne se propose pas à une touche
+  de `j`, et herd ne touche pas à ce qu'il n'a pas posé.
+- **Tailles mesurées** (voir la section mémoire ci-dessus).
+- **Temps jusqu'au premier jeton** sur Stats, à côté du débit : un modèle qui
+  pagine ses poids génère à un rythme honorable et n'affiche pourtant rien
+  pendant quatre secondes. Dérivé (`latency - predicted_ms`), la sonde étant
+  non-streaming par choix ; sans `timings` la ligne affiche `-` et sa raison,
+  jamais un zéro. `best` est ici un **minimum**.
+- **Ascenseur** sur les listes Models et Hub quand elles débordent, jamais
+  sinon. Sa position reproduit le décalage que `List` va choisir, sinon la
+  glissière contredirait les lignes qu'elle décrit.
+- **`:help`** ouvre la liste des commandes en surimpression. La table
+  (`commands.rs`) est désormais l'unique endroit où une commande est écrite, et
+  elle est **vérifiée contre les répartiteurs** par deux tests : la liste
+  précédente (`scripts.rs`) avait dérivé — ni `reload`, ni `cache`, et un
+  « écran 3 » devenu faux à l'insertion du Router.
+
+## Version à chaque commit (2026-08-12)
+
+`hooks/pre-commit`, installé par `make hooks` (qui pointe `core.hooksPath` sur
+le dossier versionné `hooks/`). Un commit qui **fixe déjà** une version est
+laissé tel quel, ce qui garde `make release` utile ; `HERD_NO_BUMP=1` saute un
+coup ; le hook **refuse** plutôt que d'indexer `Cargo.toml` en bloc si le
+fichier porte des modifications non indexées.
+
+Un hook et non `build.rs` : un script de build qui réécrit `Cargo.toml` salit
+l'arbre à chaque compilation, invalide sa propre empreinte et reboucle — et il
+compterait des *builds*, pas des changements.
+
 ## Limites connues à améliorer
 
 1. **Pas de redémarrage automatique en cas de crash.** `ServerState::Error` est
@@ -393,14 +469,17 @@ RAM disponible. Le détail des invariants est dans `CLAUDE.md` ; en résumé :
    :1234, et `process.rs` valide STARTING → SERVING contre un faux serveur
    HTTP. Manque encore un test bout en bout contre un vrai `llama-server`
    (spawn + chargement de modèle + kill).
-3. **Mode routeur non exposé dans l'IHM.** Il reste accessible uniquement par
-   `:router [--max N] [--idle S]`. Il mériterait une action d'écran (touche
-   dédiée sur Models, ou un écran à part) puisque c'est l'un des deux modes de
-   fonctionnement.
-4. **L'estimation mémoire reste une heuristique.** Elle ignore la taille réelle
-   du GGUF (téléchargé) et le cache KV effectif, qui dépend de `ctx-size` et du
-   nombre de couches. Piste : lire la taille du fichier en cache quand il est
-   présent, et modéliser le KV à partir de `ctx-size`.
+3. **Le prompt de port occupé ne couvre pas le mode routeur.** L'écran Router
+   existe désormais (`4`) avec ses deux nombres et son aperçu argv, mais un
+   port déjà pris y ressort comme l'erreur de bind de llama-server, pas comme
+   la question posée à l'utilisateur.
+4. **L'estimation mémoire reste une heuristique pour ce qui n'est pas
+   téléchargé.** Un preset présent en cache est maintenant mesuré sur son
+   fichier ; les autres sont toujours calculés à partir du nom, et le cache KV
+   effectif (fonction de `ctx-size` et du nombre de couches) n'est modélisé dans
+   aucun des deux cas. Pistes : l'API tree de HuggingFace pour les absents — un
+   appel réseau par ligne, donc à ne faire que si l'estimation se révèle fausse
+   sur un preset qui compte — et un modèle de KV à partir de `ctx-size`.
 5. **Doublons entre paliers non signalés dans l'IHM.** `gemma4-12b`,
    `qwen3-vl-8b-instruct` et `qwen-3-14b-instruct` existent dans 16gb et 32gb ;
    rien ne l'indique à l'écran (un test le vérifie côté données seulement).
@@ -408,6 +487,16 @@ RAM disponible. Le détail des invariants est dans `CLAUDE.md` ; en résumé :
    500 lignes conservées) mais n'offre ni recherche ni filtre.
 7. **`:status` ne montre pas le modèle réellement chargé en mémoire par le
    routeur** au-delà de ce que renvoie `/v1/models`.
+8. **La vision est sous-déclarée.** `no-mmproj` n'est pas lu comme la preuve
+   d'un projecteur (il est posé défensivement, y compris sur des modèles sans
+   vision) : une capacité n'est retenue que si le *nom* la porte. `gemma-4`
+   embarque donc un mmproj sans le dire et passe pour texte seul. Le correctif
+   honnête est de chercher un `mmproj` dans le listing du dépôt, pas de deviner
+   plus fort.
+9. **Le Hub ne sait pas libérer.** Il chiffre le disque récupérable (révisions
+   périmées, modèles qu'aucun palier ne nomme) sans rien proposer pour l'effacer
+   — décision assumée, mais un `rm -rf` affiché à copier, comme la ligne
+   `sysctl` de l'écran Stats, serait cohérent avec le reste.
 
 ## Méthode
 

@@ -1,6 +1,6 @@
 # Roadmap
 
-Status as of 2026-08-11.
+Status as of 2026-08-12 (herd 0.7.0).
 
 ## Delivered
 
@@ -31,15 +31,33 @@ Status as of 2026-08-11.
 - Viewport-aware paging, arrow navigation between screens, list position
   indicators, a logs scrollbar, and booleans that toggle on Enter
 - Idle cost measured and cut: no redraw on a tick when no clock is on screen
+- Favourites (`★`, kept across restarts) and `~/.herd_config` for everything the
+  user chose: favourites, overrides, the router numbers
+- `y` copies the exact launch command, quoted onto one line, checked against a
+  real shell
+- Router mode as a screen: its two numbers on screen with a live argv preview,
+  rather than flags passed where nobody could see them
+- Screen footers that fit the pane they are drawn in, dropping hints visibly
+- **Hub screen**: the cache listed with per-model size, per-repo disk, and which
+  preset in this tier names it — the ones none do in cyan, `y` copying a stanza
+  that would adopt one
+- **Measured sizes**: a downloaded preset is sized from its weights file rather
+  than from its name, and the table marks which is which
+- **Time to first token** on the Stats screen, beside throughput
+- A scrollbar on the Models and Hub lists when they overflow
+- `:help` as an overlay listing every command, from the same table the
+  dispatchers are checked against
+- A version number that moves at least a patch level on every commit
+  (`hooks/pre-commit`, installed by `make hooks`)
 
 ## Next
 
-Tracked in `doc/PROMPT_NEXT_STEPS.md` (French). Highlights: auto-restart on crash,
-a full end-to-end test against a real `llama-server` (spawn, model load, kill),
-sizing from the cached GGUF rather than the name, flagging presets duplicated
-across tiers, reading vision support from the repo listing rather than the model
-name, a `QUANT` column, and router mode as a first-class screen action rather
-than a typed command.
+Tracked in `doc/PROMPT_NEXT_STEPS.md` (French). Highlights: auto-restart on
+crash, a full end-to-end test against a real `llama-server` (spawn, model load,
+kill), flagging presets duplicated across tiers, reading vision support from the
+repo listing rather than the model name, a `QUANT` column, sizing a preset that
+is *not* yet downloaded from the HuggingFace tree API, and covering router mode
+with the port-in-use prompt.
 
 ## Not started
 

@@ -21,14 +21,16 @@ Input → UiEvent → App::update → Action → Executor → UiEvent → …
 
 A single tokio mpsc channel carries every `UiEvent`. `App::update` is pure and
 synchronous: it does no I/O and returns an `Action` (`None`, `Quit`,
-`RunCommand`, `ConfigPathChanged`, `RunChat`, `Download`). All async work happens
-in `Executor` tasks, which feed their results back into the same channel.
+`RunCommand`, `ConfigPathChanged`, `RunChat`, `CopyToClipboard`, `Download`).
+All async work happens in `Executor` tasks, which feed their results back into
+the same channel.
 
-The last three `Action`s are structured rather than string-encoded on purpose: a
+The last four `Action`s are structured rather than string-encoded on purpose: a
 chat prompt is free text that must not be re-parsed out of a command line, a
 config change has to reach the `Executor` so it resolves presets against the
-file the UI is showing, and a download carries a repo reference and an
-"and then launch" flag that have no business being flattened into a string.
+file the UI is showing, a clipboard payload is a quoted shell line full of the
+characters a parser would choke on, and a download carries a repo reference and
+an "and then launch" flag that have no business being flattened into a string.
 
 `App::update` never asks the terminal anything — it is *told*. `UiEvent::Resize`
 carries the height so the page keys can move by a real screenful while `update`
@@ -42,29 +44,42 @@ stays pure.
   from, so builds between releases are distinguishable
 - `keys.rs` : the keymap as data — the single source the footers, the status
   hint and the `?` overlay read from, checked against the dispatcher by a test
+- `commands.rs` : the command bar's vocabulary as data — what `:help` renders,
+  and what two conformance tests drive to prove every documented command is
+  handled by something. It replaced a second, hand-written list in `scripts.rs`
+  that had drifted from the dispatchers
 - `app.rs` : all state (`App`, `LauncherState`, `SessionStats`) + the pure
   `update` transition
 - `event.rs` : `UiEvent` producers (keyboard on a blocking thread, 250ms tick)
 - `engine/executor.rs` : async command dispatch, owns the llama `Supervisor`
-- `services/llama/` : `ini` (parser + argv builder + tier discovery), `process`
-  (supervisor + state machine), `api` (HTTP client), `overrides` (session-only
-  settings), `memory` (preset sizing + budget), `session` (remembered tier),
-  `hub` (what is downloaded, and fetching what is not), `caps` (what a preset is
-  optimised for and what it can do)
-- `services/` : scripts, system (shell), network
+- `services/llama/` : `ini` (parser + argv builder + tier discovery + the ini
+  stanza the Hub screen copies), `process` (supervisor + state machine), `api`
+  (HTTP client), `overrides` (setting overrides), `prefs` (`~/.herd_config`:
+  favourites, overrides, router numbers), `memory` (preset sizing + budget),
+  `session` (remembered tier), `hub` (what is downloaded, what it measures, and
+  fetching what is not), `caps` (what a preset is optimised for and what it can
+  do)
+- `services/` : clipboard (a platform command, not a crate), scripts, system
+  (shell), network
 - `components/` : read-only renderers over `App` — one per screen
-  (`models`, `server`, `test`, `stats`, `settings`, `logs`), plus `sidebar`,
-  `command_bar`, `status`, and the `confirm` / `picker` / `help` modals
+  (`models`, `hub`, `server`, `router`, `test`, `stats`, `settings`, `logs`),
+  plus `sidebar`, `command_bar`, `status`, and the `confirm` / `picker` /
+  `help` / `command_help` modals
 - `layout.rs`, `theme.rs` : geometry and styles
+- `hooks/pre-commit` : bumps the patch version on every commit (`make hooks`)
 
 ## Command Dispatch
 
-Three distinct paths, worth knowing before adding a command:
+Three distinct paths, worth knowing before adding a command — and
+`commands.rs` records which path each one takes, with a test per path that
+drives every entry:
 
-1. llama lifecycle (`launch`, `router`, `stop`, `ping`, `status`) : handled in
-   `Executor`, which owns the shared `Supervisor`
-2. `models` / `reload` : handled synchronously inside `App::submit_command`
-   (a cheap local file read; must not set the `running` flag)
+1. llama lifecycle (`launch`, `router`, `stop`, `ping`, `status`, `cache`) :
+   handled in `Executor`, which owns the shared `Supervisor`
+2. `models` / `reload` / `help` : handled synchronously inside
+   `App::submit_command` (a local file read, or local text; must not set the
+   `running` flag). `help` and `stop` are checked *before* the busy gate, since
+   both are wanted precisely when something else is stuck
 3. everything else : the generic `services::scripts::run_script` path
 
 ## Invariants
@@ -97,6 +112,15 @@ Three distinct paths, worth knowing before adding a command:
   server that had stalled.
 - **A downloader's exit code is not proof the model is usable** — llama.cpp
   decides that, so the download re-checks before claiming success.
+- **A model is sized from the file when there is one.** The measurement is the
+  current revision's weights for *that* quantisation, resolved through the
+  snapshot symlinks — not the sum of the repo's blobs, which counts every
+  revision it has ever fetched and announces a 12B model at twice its size. The
+  filesystem is read once per cache refresh, never per row per frame.
+- **Nothing is documented in two places.** The keymap, the command table and
+  the shipped tiers are data, and each has a test that drives it against the
+  code: a key that does something must be listed, a listed command must be
+  dispatched, and every shipped preset must parse and build an argv.
 - Rendering is a pure function of `App`: no mutation during draw. A batch of
   nothing but ticks skips the draw entirely unless a clock is on screen.
 
@@ -105,9 +129,14 @@ Three distinct paths, worth knowing before adding a command:
 
 `app.rs` owns a `Screen` (which view is up) and a `Mode` (what a keystroke
 means). Only `Browse` treats letters as shortcuts; `Command`, `Filter`,
-`EditSetting`, `EditPrompt`, `Picker`, `ConfirmLaunch`, `ConfirmQuit` and `Help`
-capture input until answered. New shortcuts belong inside a mode, never
-globally, or they shadow text entry.
+`EditSetting`, `EditPrompt`, `Picker`, `ConfirmLaunch`, `ConfirmQuit`, `Help`
+and `Commands` capture input until answered. New shortcuts belong inside a mode,
+never globally, or they shadow text entry.
+
+Screen digits are positional, so inserting a screen renumbers the rest. Tests
+derive the digit from `Screen::ALL`, and so must any component that names one —
+a hard-coded `3` does not fail when a screen is inserted, it quietly points
+somewhere else.
 
 `tui.rs::render(frame, app)` is split out of `TerminalSession::draw` so the
 whole UI can be rendered against a headless `TestBackend` in tests.

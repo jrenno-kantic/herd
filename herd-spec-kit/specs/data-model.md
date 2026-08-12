@@ -3,8 +3,8 @@
 ## App
 
 - `command_input: String`
-- `screen: Screen` - `Models` | `Server` | `Test` | `Stats` | `Settings` | `Logs`
-- `mode: Mode` - `Browse` | `Command` | `Filter` | `EditSetting` | `EditPrompt` | `Picker` | `ConfirmLaunch` | `ConfirmQuit` | `Help`
+- `screen: Screen` - `Models` | `Hub` | `Server` | `Router` | `Test` | `Stats` | `Settings` | `Logs`
+- `mode: Mode` - `Browse` | `Command` | `Filter` | `EditSetting` | `EditPrompt` | `Picker` | `ConfirmLaunch` | `ConfirmQuit` | `Help` | `Commands`
 - `logs: VecDeque<String>` - capped at 500 entries, oldest dropped first
 - `log_scroll: usize` - lines hidden *below* the viewport, so 0 means "follow
   the newest line" and no separate follow flag is needed
@@ -18,13 +18,18 @@
 - `config_path: PathBuf`, `config: Option<LlamaConfig>`, `config_error: Option<String>`
 - `tiers: Vec<Tier>`, `ram_gib: Option<u64>`
 - `cursor: usize`, `filter: String`
-- `overrides: Overrides` - session-only
+- `overrides: Overrides` - persisted in `~/.herd_config`
+- `favorites: BTreeSet<String>` - starred presets, by name rather than by tier:
+  the same preset appears in more than one tier and is the same model
+- `router: RouterPrefs`, `router_cursor: usize` - the two numbers the Router
+  screen would start llama-server's own router with
 - `settings_cursor: usize`, `edit_buffer: String`
 - `server: ServerRuntime`
 - `pending_launch: Option<String>`, `confirm: Option<Confirm>`
-- `cached: Option<Vec<String>>` - what `llama-server --cache-list` last
-  reported; `None` means "not asked yet", which is why availability answers
-  `Unknown` rather than guessing
+- `cached: Option<Vec<CachedModel>>` - what `llama-server --cache-list` last
+  reported, with the sizes measured off the cache directory; `None` means "not
+  asked yet", which is why availability answers `Unknown` rather than guessing
+- `hub_cursor: usize` - position in the Hub list
 - `download: Option<Download>` - the fetch in flight
 - `last_launched: Option<String>`
 - `prompt: String`, `chat: Option<Result<ChatOutcome, String>>`, `chat_pending: bool`
@@ -48,6 +53,35 @@ file list has not come back yet and renders as text, not a gauge stuck at zero.
 filesystem check — llama.cpp is what has to load the file, and it correctly
 refuses to list a repo whose current revision is half-downloaded.
 
+## CachedModel
+
+One entry of that listing, with **two** sizes because there are two questions:
+
+- `reference` — `repo:quant`, as the cache spells it (which is not how the ini
+  spells it: llama.cpp drops Unsloth's `UD-` prefix)
+- `weights: Option<u64>` — what llama.cpp would load: this quantisation's gguf
+  in the revision `refs/main` names, resolved through the snapshot symlinks
+- `bytes: Option<u64>` — everything the repo's `blobs/` holds, stale revisions
+  included. Per repo, since that is the unit the cache stores
+
+`None` rather than `0` throughout: a directory that cannot be read and one that
+is empty are different answers, and only one is worth printing.
+
+## HubRow
+
+A `CachedModel` joined to the active tier: `reference`, `weights`, `disk`,
+`preset: Option<String>` (the preset naming that repo — `None` is what the
+screen colours), and `shares_disk` (another cached quantisation lives in the
+same directory, so the disk figure is not this model's alone).
+
+## Sizing
+
+`Measured(f64)` | `Estimated(f64)` — where a preset's size came from. Rendered
+`8.1G` and `~8.1G`: once the weights are on disk there is a real file to read,
+and the heuristic behind the estimate has been wrong by a factor of four.
+A measurement only counts when the *quantisation* matches, unlike `Availability`,
+which accepts a repo cached under any tag.
+
 ## Optimisation / Capability
 
 `Optimisation` is `Qat` | `Dynamic` | `MixtureOfExperts`, read from the repo
@@ -62,6 +96,11 @@ Reset on every launch. `started_at: Option<DateTime<Local>>`, `probes`,
 `failures`, `prompt_tokens`, `completion_tokens`, `total_latency`, `last_rate`,
 `best_rate`. `average_rate()` is total tokens over total time, not a mean of
 per-request rates.
+
+Time to first token is counted separately — `ttft_probes`, `total_ttft`,
+`last_ttft`, `best_ttft` — because a server that sends no `timings` still
+answers, and averaging it in would halve the figure. `best_ttft` is a
+**minimum** where `best_rate` is a maximum: a shorter wait is a better one.
 
 ## Budget / Fit
 
@@ -84,6 +123,10 @@ preset name and an unreadable RAM figure, and is never rendered as a warning.
 - `prompt_ms` / `predicted_ms: Option<f64>` - llama.cpp's own split of the round
   trip; absent from every other server, and degrades to nothing rather than to
   zeroes
+- `ttft()` - `latency - predicted_ms`: the wait before the first token, derived
+  because the probe is non-streaming on purpose. `None` without `timings`, and
+  `None` when the subtraction goes negative, which is clock noise rather than a
+  measurement
 
 ## ServerRuntime
 
@@ -102,7 +145,7 @@ preset name and an unreadable RAM figure, and is never rendered as a warning.
 A `Section` is an ordered `key = value` list: re-setting a key replaces its value
 but keeps its original position.
 
-## Overrides (session-only)
+## Overrides
 
 Two maps, `Global` (covering `[server]` and `[*]`) and per-model. Flattened to
 argv and injected into the CLI-override slot, so the precedence chain gains a
@@ -112,10 +155,29 @@ step without the engine gaining a rule:
 [server] -> [*] -> [model] -> overrides -> explicit CLI args
 ```
 
+Persisted in `~/.herd_config`. The "never written to disk" rule was always
+about the *ini*, which is hand-maintained and commented and is still never
+touched; the overrides live in a file herd owns outright.
+
 ## Session (persisted)
 
-`~/.config/herd/session.json`, holding **only** `config_path` and `model`.
-Settings overrides are deliberately excluded.
+`~/.config/herd/session.json`, holding **only** `config_path` and `model` —
+where the program *was*. Anything the user *chose* goes to `Prefs` instead.
+
+## Prefs (persisted)
+
+`~/.herd_config`: a pretty-printed JSON dotfile with sorted keys, meant to be
+opened and edited by hand. Holds `favorites`, `overrides` and `router`
+(models-max, sleep-idle-seconds), all keyed by preset name rather than tier.
+
+Reading never fails — missing, unreadable or corrupt all mean "no preferences
+yet", since losing a convenience must not stop start-up. **Writing does report
+failure**, unlike the session file: a silently dropped save loses work done on
+purpose. Written to a temporary file and renamed, so an interrupted save cannot
+truncate the previous one.
+
+Deliberately *not* persisted: the memory reservation. It is a property of the
+machine you are on right now, not a preset setting.
 
 ## Shipped preset data (`data/`)
 
@@ -131,12 +193,20 @@ and to build a launchable argv.
 
 `Key` | `Tick` | `CommandFinished { command, output }` | `Log(String)` |
 `LlamaStatus(LlamaSnapshot)` | `PortInUse { port, model }` |
-`ChatResult(Box<Result<ChatOutcome, String>>)` | `CacheList(Vec<String>)` |
+`ChatResult(Box<Result<ChatOutcome, String>>)` | `CacheList(Vec<CachedModel>)` |
 `DownloadProgress { model, done, total }` |
 `DownloadFinished { model, result }` | `Resize { height }` | `Quit`
 
 ## Action
 
 `None` | `Quit` | `RunCommand(String)` | `ConfigPathChanged(PathBuf)` |
-`RunChat { model, prompt }` |
+`RunChat { model, prompt }` | `CopyToClipboard { label, text }` |
 `Download { model, repo, wants, then_launch }`
+
+## Command (`commands.rs`)
+
+`name` (the first token dispatch matches on), `usage` (with its arguments, as
+the listing shows it), `summary`, `group` (`Server` | `Config` | `Other`),
+`handler` (`App` | `Launcher` | `Script` — which of the three dispatch paths
+runs it), `hidden` (`launch!` only) and `probe` (a form the conformance tests
+can safely drive).
