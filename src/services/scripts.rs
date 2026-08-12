@@ -1,32 +1,25 @@
-//! The generic "run once, print the output" path herd grew out of.
+//! What is left of the generic "run once, print the output" path herd grew
+//! out of: `sh`, and nothing else.
 //!
-//! Two things used to live here that no longer do. The command *list* was a
-//! second, hand-written copy of what the dispatchers accept and had drifted
-//! from them — `commands.rs` is the only place a command is written down
-//! now. And two commands were pre-pivot scaffolding: `test`, which answered
-//! the fixed string "Test executed", and `scan`, which answered
-//! "No devices discovered" without ever looking at a network. Both were
-//! harmless while nothing advertised them; `:help` advertises what is here,
-//! and a listing that promises a scanner there is no scanner for is exactly
-//! the dishonesty the rest of this codebase is built to avoid.
+//! Three things went, all of them scaffolding from before the pivot:
 //!
-//! `sh` stays because it does what it says: the escape hatch for the
-//! occasional `:sh ls ~/models` without leaving the alternate screen.
-
-use tokio::time::{sleep, Duration};
+//! - the command *list*, a second hand-written copy of what the dispatchers
+//!   accept that had drifted from them — `commands.rs` is the only place a
+//!   command is written down now;
+//! - `test` and `scan`, which answered fixed strings, the second without
+//!   ever looking at a network;
+//! - a `help` arm that could no longer fire. `:help` is intercepted in
+//!   `App::submit_command` and answered as an overlay, so nothing routes it
+//!   here — and an unreachable fallback is not insurance, it is a claim
+//!   nobody can check.
+//!
+//! A 300 ms `sleep` went with them. It made a generated demo feel like it
+//! was working; all it did here was tax every `:sh` by a third of a second.
 
 pub async fn run_script(name: &str) -> String {
-    sleep(Duration::from_millis(300)).await;
-
-    match name {
-        // Kept as a fallback: `:help` is answered by the App as an overlay
-        // and never reaches here, but a caller that does get here should
-        // get the list rather than "Unknown command".
-        "help" => crate::commands::help_text(),
-        command if command.starts_with("sh ") => {
-            crate::services::system::run_shell(&command[3..]).await
-        }
-        _ => "Unknown command".into(),
+    match name.strip_prefix("sh ") {
+        Some(command) => crate::services::system::run_shell(command).await,
+        None => "Unknown command".into(),
     }
 }
 
@@ -34,8 +27,8 @@ pub async fn run_script(name: &str) -> String {
 mod tests {
     use super::*;
 
-    /// `sh` is the one generic command left, and the arm matches on a
-    /// prefix — a bare `sh` is a usage error rather than a shell.
+    /// `sh` is the one generic command left, and it matches on a prefix —
+    /// a bare `sh` is a usage error rather than a shell.
     #[tokio::test]
     async fn sh_runs_the_command_it_is_given() {
         assert_eq!(run_script("sh printf hello").await, "hello");
@@ -44,10 +37,12 @@ mod tests {
 
     /// The retired scaffolding must not answer any more: a command that is
     /// no longer listed and still runs is the drift `commands.rs` exists to
-    /// prevent, pointing the other way.
+    /// prevent, pointing the other way. `help` is here too — it is listed,
+    /// but it is answered by the App, and reaching this path would mean the
+    /// interception had broken.
     #[tokio::test]
-    async fn the_pre_pivot_stubs_are_gone() {
-        for retired in ["test", "scan"] {
+    async fn nothing_but_sh_is_answered_here() {
+        for retired in ["test", "scan", "help"] {
             assert_eq!(run_script(retired).await, "Unknown command", "{retired}");
         }
     }

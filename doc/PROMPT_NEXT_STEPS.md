@@ -14,10 +14,14 @@ Filiation : `llama-launch.js` résout la précédence ini et **imprime** un argv
 herd résout la même précédence, affiche l'argv en direct, puis lance et
 supervise réellement le processus.
 
-Le runner générique d'origine subsiste en dessous, réduit à `help` et `sh` :
-`test` et `scan` répondaient des chaînes fixes — `scan` n'a jamais regardé le
-réseau — et un `:help` qui les annonce transforme un vestige inoffensif en
-promesse fausse.
+Du runner générique d'origine il ne reste que `sh`. `test` et `scan` répondaient
+des chaînes fixes — `scan` n'a jamais regardé le réseau — et un `:help` qui les
+annonce transforme un vestige inoffensif en promesse fausse. Le reste du
+périmètre initial (méta-prompt multi-devices, système de plugins jamais
+commencé, prompts de génération) et les compatibilités de renommage
+(`$OPS_TUI_LLAMA_CONFIG`, `~/.config/ops-tui/session.json`) ont été supprimés
+avec lui : l'historique est dans git, c'est là qu'appartient la trace de ce
+qu'un projet a été.
 
 ## Les huit écrans
 

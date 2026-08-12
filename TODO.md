@@ -416,7 +416,34 @@
       quietly substituting the second probe, which would be a warm number
       wearing a cold label.
 
-- [x] ensure doc and specs are up to date → `herd-spec-kit/` was two
+- [x] are the initial (pre-pivot) features obsolete? clean the project of
+      them → **yes, all of them; only `sh` survives**, and it was kept on
+      purpose two steps ago because it does what it claims.
+    - **Code.** The `help` arm in `run_script` could no longer fire —
+      `:help` is intercepted in `App::submit_command` — and an unreachable
+      fallback is not insurance, it is a claim nobody can check;
+      `commands::help_text` went with it. So did a **300 ms `sleep`** at
+      the top of `run_script`: it made a generated demo feel busy, and did
+      nothing here but tax every `:sh` by a third of a second.
+    - **The rename shims went too**, and this was checked rather than
+      assumed: `$OPS_TUI_LLAMA_CONFIG` is unset and appears in no shell
+      profile, and `~/.config/herd/session.json` is *newer* than the
+      `ops-tui` one, so the fallback branch was already unreachable. The
+      migration had been paid for. The stale file in `~/.config/ops-tui/`
+      is inert and left alone — herd does not delete what it did not write.
+    - **Docs and specs.** Deleted: `doc/prompt.md` (the multi-device
+      méta-prompt, already headed "document historique"), the spec kit's
+      `prompts/` (bootstrap / debug / features — the project they describe
+      building exists), `skills/prompting.md`, and `specs/plugins.md` — a
+      proposal with no trait, registry or loader, whose examples were the
+      dead scope. `roadmap.md` now has a **Retired** section instead of a
+      "Not started" one pointing at files that no longer exist.
+    - `skills/coding_loop.md` was rewritten rather than deleted: the
+      "start green, leave green" rule is live, and the numbered
+      generate-run-debug list around it was not.
+    - **Kept:** `data/` (llama reference scripts and test fixtures, not
+      pre-pivot), and the TODO entries above — this file is a record of
+      decisions, so its history stays even where the code has gone.
       releases stale: it still listed six screens and no Router. Product,
       UX, architecture, data-model, services, roadmap, layout, theme and
       plugins are all current, and `spec-kit.yaml` now records which herd

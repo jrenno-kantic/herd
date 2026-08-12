@@ -202,16 +202,6 @@ pub fn find(line: &str) -> Option<&'static Command> {
     ALL.iter().find(|command| command.name == name)
 }
 
-/// The listing as plain text, for a caller with no overlay to draw — the
-/// script path's fallback, so a `help` that somehow reaches it answers with
-/// the list rather than "Unknown command".
-pub fn help_text() -> String {
-    visible()
-        .map(|command| format!("{:<28} {}", command.usage, command.summary))
-        .collect::<Vec<_>>()
-        .join("\n")
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;

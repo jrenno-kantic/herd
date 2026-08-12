@@ -59,7 +59,20 @@ repo listing rather than the model name, a `QUANT` column, sizing a preset that
 is *not* yet downloaded from the HuggingFace tree API, and covering router mode
 with the port-in-use prompt.
 
-## Not started
+## Retired
 
-- Plugin system (see `plugins.md`)
-- Device control and automation, the original pre-pivot scope (see `doc/prompt.md`)
+The project began as a multi-device console (Flipper Zero, iPhone, Switch) and
+pivoted to llama-server. Everything left of that scope has now been removed
+rather than carried as intent nobody was going to act on:
+
+- the `scan` and `test` commands, which answered fixed strings
+- `services/network.rs`, which existed only for `scan`
+- the plugin system, which was a proposal with no trait, registry or loader —
+  extension happens by adding an entry to `commands.rs` and a dispatch arm,
+  which `architecture.md` documents
+- the generation-era prompts and the original méta-prompt
+
+`sh <command>` is the one piece kept: it does what it claims. The provenance
+is in git history, which is where a record of what a project used to be
+belongs — a spec that describes something the code does not do is worse than
+no spec.

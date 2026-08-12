@@ -176,13 +176,14 @@ pub fn preset_name(reference: &str) -> String {
 
 /// The config override from the environment.
 ///
-/// `$OPS_TUI_LLAMA_CONFIG` is still honoured after the rename, because the
-/// variable is likely to be sitting in a shell profile that nobody thinks
-/// to update — and silently ignoring it would resolve to a *different*
-/// tier rather than failing visibly. The new name wins where both are set.
+/// `$OPS_TUI_LLAMA_CONFIG` was honoured alongside this for as long as the
+/// rename was recent: the variable was likely to be sitting in a shell
+/// profile nobody thinks to update, and ignoring it would have resolved to
+/// a *different* tier rather than failing visibly. The migration is done —
+/// it is set nowhere on this machine and in no shell profile — so the
+/// second name is gone rather than carried indefinitely.
 pub fn config_env() -> Option<String> {
     std::env::var("HERD_LLAMA_CONFIG")
-        .or_else(|_| std::env::var("OPS_TUI_LLAMA_CONFIG"))
         .ok()
         .filter(|value| !value.trim().is_empty())
 }
@@ -612,39 +613,30 @@ no-mmproj = true
         assert!(discover_tiers(Path::new("/nonexistent/herd/models")).is_empty());
     }
 
-    /// The old variable is likely sitting in a shell profile nobody thinks
-    /// to update after a rename. Ignoring it would not fail visibly — it
-    /// would quietly resolve to a *different* tier.
+    /// One variable now, and an empty one is not an override — that would
+    /// resolve to a path of `""` and fail with an unreadable error rather
+    /// than falling through to tier detection.
     ///
     /// Serialised, because it mutates process-wide environment.
     #[test]
-    fn both_the_new_and_the_old_env_var_are_honoured() {
+    fn the_environment_can_name_the_config() {
         let _guard = ENV_LOCK
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner());
-        let restore = (
-            std::env::var("HERD_LLAMA_CONFIG").ok(),
-            std::env::var("OPS_TUI_LLAMA_CONFIG").ok(),
-        );
+        let restore = std::env::var("HERD_LLAMA_CONFIG").ok();
 
         std::env::remove_var("HERD_LLAMA_CONFIG");
-        std::env::remove_var("OPS_TUI_LLAMA_CONFIG");
         assert_eq!(config_env(), None);
 
-        std::env::set_var("OPS_TUI_LLAMA_CONFIG", "/old/models.ini");
-        assert_eq!(config_env().as_deref(), Some("/old/models.ini"));
-
-        // The new name wins where both are set.
         std::env::set_var("HERD_LLAMA_CONFIG", "/new/models.ini");
         assert_eq!(config_env().as_deref(), Some("/new/models.ini"));
 
+        std::env::set_var("HERD_LLAMA_CONFIG", "   ");
+        assert_eq!(config_env(), None, "blank is not a config path");
+
         std::env::remove_var("HERD_LLAMA_CONFIG");
-        std::env::remove_var("OPS_TUI_LLAMA_CONFIG");
-        if let Some(value) = restore.0 {
+        if let Some(value) = restore {
             std::env::set_var("HERD_LLAMA_CONFIG", value);
-        }
-        if let Some(value) = restore.1 {
-            std::env::set_var("OPS_TUI_LLAMA_CONFIG", value);
         }
     }
 

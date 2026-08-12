@@ -10,6 +10,10 @@ It descends from `llama-launch.js`, which resolves ini precedence and prints an
 argv. HERD resolves the same precedence, shows the argv live, and then
 actually spawns and supervises the process.
 
+It began as something else — a multi-device console — and nothing of that scope
+survives in the code or in these specs. The history is in git, which is where a
+record of what a project used to be belongs.
+
 ## Core Use Cases
 
 - See what is in the active `models.ini`: presets with their repo, context size,

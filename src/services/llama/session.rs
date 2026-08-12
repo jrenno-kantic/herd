@@ -23,16 +23,14 @@ pub struct Session {
 }
 
 impl Session {
-    /// Reads the session file, falling back to the pre-rename location.
+    /// Reads the session file. Anything unreadable is "no memory yet".
     pub fn load() -> Self {
         let read = |candidate: Option<PathBuf>| -> Option<Self> {
             let text = std::fs::read_to_string(candidate?).ok()?;
             serde_json::from_str(&text).ok()
         };
 
-        read(path())
-            .or_else(|| read(legacy_path()))
-            .unwrap_or_default()
+        read(path()).unwrap_or_default()
     }
 
     pub fn save(&self) {
@@ -65,17 +63,6 @@ fn path() -> Option<PathBuf> {
     Some(PathBuf::from(home).join(".config/herd/session.json"))
 }
 
-/// Where this file lived when the program was called ops-tui.
-///
-/// Read-only, and only when the current path holds nothing: a rename
-/// should not quietly cost the user the tier they were last working in.
-/// Nothing is ever written here, so the old file simply becomes stale and
-/// can be deleted by hand.
-fn legacy_path() -> Option<PathBuf> {
-    let home = std::env::var("HOME").ok()?;
-    Some(PathBuf::from(home).join(".config/ops-tui/session.json"))
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -106,21 +93,16 @@ mod tests {
         assert_eq!(Session::default().usable_config_path(), None);
     }
 
-    /// The rename must not cost anyone the tier they were last working in,
-    /// so the pre-rename location is still read when the new one is empty.
-    /// Both paths are derived the same way, so this pins the relationship
-    /// rather than the literal strings.
+    /// One location, under the program's own name. The pre-rename path was
+    /// read as a fallback while the rename was recent; it is gone now that
+    /// the migration has happened.
     #[test]
-    fn the_pre_rename_session_file_is_still_read() {
-        let (current, legacy) = (path(), legacy_path());
+    fn the_session_lives_under_the_programs_own_name() {
+        let current = path().expect("no HOME in this env");
+        let current = current.to_string_lossy();
 
-        assert!(current.is_some() && legacy.is_some(), "no HOME in this env");
-        assert_ne!(current, legacy, "the fallback points at the same file");
-        assert!(
-            legacy.unwrap().to_string_lossy().contains("ops-tui"),
-            "the fallback is not the old location"
-        );
-        assert!(current.unwrap().to_string_lossy().contains("herd"));
+        assert!(current.contains(".config/herd/"), "{current}");
+        assert!(!current.contains("ops-tui"), "{current}");
     }
 
     #[test]

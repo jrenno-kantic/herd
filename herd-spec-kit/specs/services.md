@@ -70,14 +70,15 @@ a missing `xclip` is discovered at the paste, which is too late.
 
 ## Script Service
 
-Runs what is left of the generic path: `sh`, and `help` as a fallback. The
-command *catalogue* moved to `commands.rs`, which is now the only place a
-command is written down — the copy that lived here had drifted from the
-dispatchers.
+All that is left of the generic path is `sh`. The command *catalogue* moved to
+`commands.rs`, which is now the only place a command is written down — the copy
+that lived here had drifted from the dispatchers.
 
 `test` and `scan` were removed once `:help` started advertising them: both
-answered fixed strings, and `scan` never looked at a network. A stub is
-harmless until something promises it.
+answered fixed strings, and `scan` never looked at a network. A stub is harmless
+until something promises it. The `help` fallback went too — `:help` is answered
+in `App::submit_command`, so that arm could no longer fire — along with a 300 ms
+`sleep` that only taxed `:sh`.
 
 ## System Service
 

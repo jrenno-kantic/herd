@@ -560,11 +560,17 @@ The `:` bar remains available for anything faster to type than to navigate:
 - `help` -> the list below, as an overlay
 - `sh <command>` -> run a shell command without leaving the alternate screen
 
-`test` and `scan` were removed in 0.7.1. They were pre-pivot scaffolding that
-answered fixed strings — `scan` never looked at a network — and a listing that
-promises a scanner there is no scanner for is the same dishonesty the columns
-and the key hints are designed to avoid. `:test` also collided with the Test
-screen, which is a different thing entirely.
+`sh` is all that is left of the generic runner HERD grew out of. `test` and
+`scan` were removed in 0.7.1: they were pre-pivot scaffolding that answered
+fixed strings — `scan` never looked at a network — and a listing that promises a
+scanner there is no scanner for is the same dishonesty the columns and the key
+hints are designed to avoid. `:test` also collided with the Test screen, which
+is a different thing entirely.
+
+The rest of that scope went in 0.7.3, along with the compatibility shims from
+the rename (`$OPS_TUI_LLAMA_CONFIG` and `~/.config/ops-tui/session.json`), which
+had done their job. If you still have an `ops-tui` session file it is now inert
+and can be deleted by hand; HERD does not touch files it did not write.
 
 **`:help` lists them all**, grouped, with their arguments — the counterpart to
 `?` for keys:
