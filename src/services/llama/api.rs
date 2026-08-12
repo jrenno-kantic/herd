@@ -95,6 +95,73 @@ pub async fn port_in_use_settled(host: &str, port: u16) -> bool {
     true
 }
 
+/// Turns a failed request into something the user can act on.
+///
+/// Every feature that talks to `/v1/...` needs a server to be serving, and
+/// when none is, reqwest says `error sending request for url
+/// (http://127.0.0.1:1234/v1/models)`. That describes the plumbing rather
+/// than the situation: nothing is wrong with the request, there is simply
+/// no llama-server running. A user reading it has to know that "error
+/// sending request" means "connection refused" to work out that the fix is
+/// to launch something.
+///
+/// So a refused connection is reported as what it is, with the two ways
+/// out of it. Anything else keeps its detail: a timeout means something
+/// *did* answer the door and is a different problem, and an unrecognised
+/// failure is flattened through its source chain rather than truncated at
+/// reqwest's own top-level message.
+///
+/// The base URL is named because it is the fact the user has to check —
+/// a server on the wrong port is indistinguishable from no server at all.
+fn unreachable(base_url: &str, error: &reqwest::Error) -> String {
+    if error.is_connect() || refused(error) {
+        return format!(
+            "nothing is listening on {base_url} — no llama-server is running \
+             (start one with :launch <model>, or :router)"
+        );
+    }
+    if error.is_timeout() {
+        return format!("{base_url} accepted the connection but did not answer in time");
+    }
+
+    format!("{base_url}: {}", chain(error))
+}
+
+/// Was the connection refused, whatever reqwest calls that this week?
+///
+/// `is_connect()` is the documented test and covers it today, but the
+/// classification has moved between reqwest releases before; the io error
+/// underneath does not move, so it is worth also looking there rather than
+/// silently falling back to the plumbing message.
+fn refused(error: &reqwest::Error) -> bool {
+    let mut source: Option<&(dyn std::error::Error + 'static)> = Some(error);
+
+    while let Some(cause) = source {
+        if let Some(io) = cause.downcast_ref::<std::io::Error>() {
+            return matches!(
+                io.kind(),
+                std::io::ErrorKind::ConnectionRefused
+                    | std::io::ErrorKind::ConnectionReset
+                    | std::io::ErrorKind::AddrNotAvailable
+            );
+        }
+        source = cause.source();
+    }
+    false
+}
+
+/// Flattens an error and its causes. reqwest's own Display stops at the
+/// top, which never says whether the problem was DNS, TLS or the socket.
+fn chain(error: &dyn std::error::Error) -> String {
+    let mut parts = vec![error.to_string()];
+    let mut source = error.source();
+    while let Some(cause) = source {
+        parts.push(cause.to_string());
+        source = cause.source();
+    }
+    parts.join(": ")
+}
+
 /// The system prompt from `test_call.sh`, kept verbatim so a probe from
 /// herd and a run of the script are comparable.
 pub const SYSTEM_PROMPT: &str =
@@ -220,7 +287,7 @@ pub async fn chat(base_url: &str, model: &str, prompt: &str) -> Result<ChatOutco
         .json(&body)
         .send()
         .await
-        .map_err(|error| format!("request failed: {error}"))?;
+        .map_err(|error| unreachable(base_url, &error))?;
 
     let status = response.status();
     let text = response
@@ -281,7 +348,7 @@ pub async fn list_models(base_url: &str) -> Result<Vec<String>, String> {
         .timeout(STATUS_TIMEOUT)
         .send()
         .await
-        .map_err(|error| format!("request failed: {error}"))?;
+        .map_err(|error| unreachable(base_url, &error))?;
 
     let status = response.status();
     let text = response
@@ -386,6 +453,53 @@ mod tests {
     fn an_unknown_shape_yields_no_models_rather_than_an_error() {
         let value = serde_json::json!({"something": "else"});
         assert!(parse_model_list(&value).is_empty());
+    }
+
+    /// A port nothing is listening on. Bound and dropped, so the number is
+    /// real and free rather than a guess that might collide with something
+    /// the developer happens to be running.
+    fn closed_port() -> u16 {
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("bind");
+        let port = listener.local_addr().expect("addr").port();
+        drop(listener);
+        port
+    }
+
+    /// The message this whole classification exists for.
+    ///
+    /// Every feature that talks to the server needs one to be serving, and
+    /// when none is, reqwest reports `error sending request for url (…)` —
+    /// which describes the plumbing, not the situation, and leaves the
+    /// reader to work out that it means "launch something". No network is
+    /// involved here: the connection is refused by the loopback interface
+    /// immediately.
+    #[tokio::test]
+    async fn a_silent_port_is_reported_as_no_server_running() {
+        let base = base_url("127.0.0.1", closed_port());
+
+        for message in [
+            list_models(&base).await.expect_err("nothing is listening"),
+            chat(&base, "any-model", "hello")
+                .await
+                .expect_err("nothing is listening"),
+        ] {
+            assert!(
+                message.contains("no llama-server is running"),
+                "not actionable: {message}"
+            );
+            assert!(
+                message.contains(&base),
+                "the endpoint is not named: {message}"
+            );
+            assert!(
+                message.contains(":launch") && message.contains(":router"),
+                "neither way out is named: {message}"
+            );
+            assert!(
+                !message.contains("error sending request"),
+                "reqwest's plumbing message leaked through: {message}"
+            );
+        }
     }
 
     /// Live checks against a server the developer started by hand. Ignored

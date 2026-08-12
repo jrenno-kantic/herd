@@ -176,6 +176,14 @@ pub const ALL: &[Command] = &[
         "help",
     ),
     command(
+        "about",
+        "about",
+        "which build this is, and what it is running against",
+        Group::Other,
+        Handler::App,
+        "about",
+    ),
+    command(
         "sh",
         "sh <command>",
         "run a shell command and print its output",

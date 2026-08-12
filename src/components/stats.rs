@@ -47,7 +47,7 @@ fn session(app: &App) -> Paragraph<'static> {
         field("tokens in", stats.prompt_tokens.to_string()),
         field("tokens out", stats.completion_tokens.to_string()),
         field("throughput", throughput(app)),
-        field("first token", first_token(app)),
+        field("TTFT", ttft(app)),
     ];
 
     Paragraph::new(lines).block(block(" Session "))
@@ -61,28 +61,48 @@ fn session(app: &App) -> Paragraph<'static> {
 /// looking at nothing for four seconds, and throughput alone reports that
 /// session as healthy.
 ///
-/// **Taken from the first probe after the load, and no other.** That is the
-/// only request that measures a cold model; every one after it is answered
-/// from resident weights and a warm cache, so a running average would drift
-/// towards the warm figure the more probes were run and would describe
-/// neither. The line says which probe it is from, so a reader is not left
-/// to assume it is the latest.
+/// **The leading figure is the cold one** — the first probe after the load,
+/// the only request that measures a model that is not yet resident. `last`
+/// and `avg` follow it and describe the warm model, which is the other half
+/// of the question: the first says how long until it was usable at all, and
+/// these say what it costs per request once it is. They are kept apart
+/// rather than averaged together, because a mean over both drifts towards
+/// the warm value the more probes are run and describes neither.
 ///
-/// It also says where the number came from, being derived from the round
-/// trip and the server's own generation time rather than watched arriving —
-/// the probe is non-streaming. A server that sends no `timings` gets a
-/// plain `-` rather than a zero.
-fn first_token(app: &App) -> String {
+/// Every figure here is derived from the round trip and the server's own
+/// generation time rather than watched arriving — the probe is
+/// non-streaming — so a server that sends no `timings` gets a plain `-`
+/// and a reason rather than a zero.
+fn ttft(app: &App) -> String {
     let stats = &app.llama.stats;
 
-    match (stats.first_token, stats.probes) {
-        (Some(cold), _) => format!("{}  (first call after loading)", seconds(cold)),
-        (None, 0) => format!("-  (run a test on screen {})", screen_number(Screen::Test)),
+    let cold = match (stats.first_token, stats.probes) {
+        (Some(cold), _) => seconds(cold),
+        (None, 0) => {
+            return format!(
+                "-  (Time to First Token) · run a test on screen {}",
+                screen_number(Screen::Test)
+            )
+        }
         // The first probe answered but its server accounts for nothing, so
         // there is no cold measurement to be had this session — and the
-        // second probe is not a stand-in for it.
-        (None, _) => "-  (that server reported no timings)".to_string(),
+        // second probe is not a stand-in for it, warm as it is.
+        (None, _) => "-".to_string(),
+    };
+
+    let mut parts = vec![format!("{cold}  (Time to First Token)")];
+    if let Some(last) = stats.last_ttft {
+        parts.push(format!("last {}", seconds(last)));
     }
+    if let Some(average) = stats.average_ttft() {
+        parts.push(format!("avg {}", seconds(average)));
+    }
+
+    if parts.len() == 1 {
+        parts.push("that server reported no timings".to_string());
+    }
+
+    parts.join(" · ")
 }
 
 fn seconds(duration: std::time::Duration) -> String {
@@ -254,7 +274,7 @@ mod tests {
         let expected = format!("screen {}", screen_number(Screen::Test));
 
         assert!(throughput(&app()).contains(&expected));
-        assert!(first_token(&app()).contains(&expected));
+        assert!(ttft(&app()).contains(&expected));
     }
 
     /// Sends a probe whose server accounts for `predicted` ms of
@@ -276,24 +296,47 @@ mod tests {
         let mut app = app();
         timed_probe(&mut app, 6, 1_000.0);
 
-        let text = first_token(&app);
+        let text = ttft(&app);
         assert!(text.contains("5.00s"), "{text}");
-        assert!(text.contains("first call after loading"), "{text}");
+        assert!(text.contains("Time to First Token"), "{text}");
     }
 
-    /// **Only the first call after a load measures anything.** Every probe
-    /// after it is answered from resident weights and a warm cache, so a
-    /// later — invariably faster — one must not replace the cold figure,
-    /// and must not be averaged into it either.
+    /// **The leading figure is the cold one**, and stays cold. Every probe
+    /// after the first is answered from resident weights and a warm cache,
+    /// so a later — invariably faster — one must not replace it or be
+    /// averaged into it; those go to `last` and `avg` beside it, which
+    /// describe the warm model on purpose.
     #[test]
-    fn only_the_first_probe_after_a_load_is_measured() {
+    fn the_leading_figure_stays_the_cold_one() {
         let mut app = app();
-        timed_probe(&mut app, 6, 1_000.0);
-        timed_probe(&mut app, 2, 1_000.0);
-        timed_probe(&mut app, 1, 500.0);
+        timed_probe(&mut app, 6, 1_000.0); // cold: 5s
+        timed_probe(&mut app, 2, 1_000.0); // warm: 1s
+        timed_probe(&mut app, 1, 500.0); // warm: 0.5s
 
         assert_eq!(app.llama.stats.first_token, Some(Duration::from_secs(5)));
-        assert!(first_token(&app).contains("5.00s"), "{}", first_token(&app));
+
+        let text = ttft(&app);
+        assert!(text.starts_with("5.00s"), "the cold figure moved: {text}");
+        assert!(text.contains("last 0.50s"), "{text}");
+        // (5 + 1 + 0.5) / 3 = 2.166…, and the average covers the cold
+        // probe too: it is the mean over what was measured, where the
+        // leading figure is one specific probe.
+        assert!(text.contains("avg 2.17s"), "{text}");
+    }
+
+    /// One probe is cold, last and average all at once, and saying so
+    /// three times is correct rather than a bug — the numbers only diverge
+    /// once there is a second probe to diverge from.
+    #[test]
+    fn a_single_probe_is_its_own_last_and_average() {
+        let mut app = app();
+        timed_probe(&mut app, 6, 1_000.0);
+
+        let text = ttft(&app);
+        assert!(
+            text.contains("last 5.00s") && text.contains("avg 5.00s"),
+            "{text}"
+        );
     }
 
     /// ...and a new launch starts the measurement again, since the model
@@ -318,21 +361,35 @@ mod tests {
 
     /// A server that sends no `timings` has no TTFT to report, and must
     /// say so rather than showing a zero — the same restraint as
-    /// `Fit::Unknown`. The *second* probe is not a stand-in for the first:
-    /// by then the model is warm, so there is simply no cold measurement
-    /// to be had this session.
+    /// `Fit::Unknown`.
     #[test]
-    fn a_server_without_timings_reports_no_first_token_time() {
+    fn a_server_without_timings_reports_nothing_rather_than_zero() {
         let mut app = app();
         probe(&mut app, 10, 5.0, 1);
-        timed_probe(&mut app, 6, 1_000.0);
 
         assert_eq!(app.llama.stats.first_token, None);
+        assert!(ttft(&app).contains("no timings"), "{}", ttft(&app));
+        assert!(!ttft(&app).contains("0.00s"), "{}", ttft(&app));
+    }
+
+    /// The first probe reporting nothing does not promote the second: by
+    /// then the model is warm, so there is no cold measurement to be had
+    /// this session. The dash says so, and the warm figures still show —
+    /// they are true, and they are what there is.
+    #[test]
+    fn a_warm_probe_is_never_promoted_to_the_cold_figure() {
+        let mut app = app();
+        probe(&mut app, 10, 5.0, 1); // no timings: no cold measurement
+        timed_probe(&mut app, 6, 1_000.0); // warm, and timed
+
+        assert_eq!(app.llama.stats.first_token, None);
+
+        let text = ttft(&app);
         assert!(
-            first_token(&app).contains("no timings"),
-            "{}",
-            first_token(&app)
+            text.starts_with('-'),
+            "a warm probe took the cold slot: {text}"
         );
+        assert!(text.contains("last 5.00s"), "{text}");
     }
 
     /// The average must come from totals, not from averaging the

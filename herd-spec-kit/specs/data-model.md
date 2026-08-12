@@ -4,7 +4,7 @@
 
 - `command_input: String`
 - `screen: Screen` - `Models` | `Hub` | `Server` | `Router` | `Test` | `Stats` | `Settings` | `Logs`
-- `mode: Mode` - `Browse` | `Command` | `Filter` | `EditSetting` | `EditPrompt` | `Picker` | `ConfirmLaunch` | `ConfirmQuit` | `ConfirmDelete` | `Help` | `Commands`
+- `mode: Mode` - `Browse` | `Command` | `Filter` | `EditSetting` | `EditPrompt` | `Picker` | `ConfirmLaunch` | `ConfirmQuit` | `ConfirmDelete` | `Help` | `Commands` | `About`
 - `logs: VecDeque<String>` - capped at 500 entries, oldest dropped first
 - `log_scroll: usize` - lines hidden *below* the viewport, so 0 means "follow
   the newest line" and no separate follow flag is needed
@@ -105,13 +105,19 @@ Reset on every launch. `started_at: Option<DateTime<Local>>`, `probes`,
 `best_rate`. `average_rate()` is total tokens over total time, not a mean of
 per-request rates.
 
-`first_token: Option<Duration>` holds the time to first token of **the first
-probe after the load, and no other** — the only request that measures a cold
-model. Later probes are answered from resident weights and a warm cache, so
-averaging them in would drift the figure towards the warm one and describe
-neither. Reset with the rest on every `Starting`, so a relaunch measures again;
-`None` when that first probe's server reported no `timings`, since the second
-probe is not a stand-in for it.
+Time to first token is **three figures, and the leading one is cold**.
+`first_token: Option<Duration>` is the first probe after the load and no other —
+the only request that measures a model whose weights are not yet resident.
+`last_ttft`, `ttft_probes` and `total_ttft` cover every probe that reported one
+and describe the *warm* model: what a request costs once it is loaded.
+
+They are kept apart rather than merged, since one mean over both drifts towards
+the warm value the more probes are run and describes neither. All are reset on
+every `Starting`, so a relaunch measures again. `first_token` stays `None` when
+that first probe's server reported no `timings` — a later probe is warm, and
+promoting one would be a warm number wearing a cold label — while the warm
+figures still show. The warm counters have their own probe count rather than
+using `probes`, because a server that sends no timings still answers.
 
 ## Budget / Fit
 

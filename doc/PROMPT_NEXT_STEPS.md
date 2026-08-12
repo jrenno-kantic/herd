@@ -441,11 +441,12 @@ cache de llama.cpp est **mesurable**, il n'a plus à être deviné.
   suppression, volontairement** : libérer 17 Gio ne se propose pas à une touche
   de `j`, et herd ne touche pas à ce qu'il n'a pas posé.
 - **Tailles mesurées** (voir la section mémoire ci-dessus).
-- **Temps jusqu'au premier jeton** sur Stats, à côté du débit : un modèle qui
-  pagine ses poids génère à un rythme honorable et n'affiche pourtant rien
-  pendant quatre secondes. Dérivé (`latency - predicted_ms`), la sonde étant
-  non-streaming par choix ; sans `timings` la ligne affiche `-` et sa raison,
-  jamais un zéro. `best` est ici un **minimum**.
+- **TTFT** sur Stats, à côté du débit : un modèle qui pagine ses poids génère à
+  un rythme honorable et n'affiche pourtant rien pendant quatre secondes.
+  Dérivé (`latency - predicted_ms`), la sonde étant non-streaming par choix ;
+  sans `timings` la ligne affiche `-` et sa raison, jamais un zéro. La ligne
+  porte **trois chiffres et le premier est à froid** — voir la section datée
+  plus bas.
 - **Ascenseur** sur les listes Models et Hub quand elles débordent, jamais
   sinon. Sa position reproduit le décalage que `List` va choisir, sinon la
   glissière contredirait les lignes qu'elle décrit.
@@ -454,6 +455,73 @@ cache de llama.cpp est **mesurable**, il n'a plus à être deviné.
   elle est **vérifiée contre les répartiteurs** par deux tests : la liste
   précédente (`scripts.rs`) avait dérivé — ni `reload`, ni `cache`, et un
   « écran 3 » devenu faux à l'insertion du Router.
+
+## TTFT : trois chiffres, le premier à froid (2026-08-12)
+
+```
+TTFT        4.20s  (Time to First Token) · last 0.35s · avg 1.63s
+```
+
+`first_token` ne retient que **la première sonde après le chargement** — la
+seule qui mesure un modèle dont les poids ne sont pas encore résidents. `last`
+et `avg` couvrent toutes les sondes qui ont rapporté un `timings` et décrivent
+le modèle **chaud** : l'autre moitié de la question, ce que coûte une requête
+une fois le modèle en place.
+
+Les deux sont tenus séparés plutôt que fondus en un seul nombre : une moyenne
+sur l'ensemble dérive vers la valeur à chaud à mesure qu'on sonde, et ne décrit
+alors ni l'une ni l'autre. Tout est remis à zéro à chaque `Starting`.
+
+Si la *première* sonde ne rapporte pas de `timings`, le chiffre de tête reste
+`-` et les chiffres à chaud s'affichent quand même : promouvoir la seconde
+donnerait un nombre chaud portant une étiquette froide.
+
+## « Aucun serveur ne tourne » (2026-08-12)
+
+Trois fonctions exigent un llama-server en service — `:status`, `:ping <model>`
+(et `p` sur l'écran Server), et la sonde de l'écran Test — et toutes trois
+échouaient dans le vocabulaire de la tuyauterie :
+
+```
+:status -> http://127.0.0.1:1234 unreachable: request failed: error sending
+           request for url (http://127.0.0.1:1234/v1/models)
+```
+
+Deux problèmes sur une ligne, et aucune des deux moitiés ne dit que la solution
+est de lancer quelque chose. `api::unreachable` classe désormais l'échec : une
+connexion refusée devient « nothing is listening on <base> — no llama-server is
+running (start one with :launch <model>, or :router) » ; un timeout reste un
+timeout (quelque chose *a* répondu, c'est un autre problème) ; le reste est
+aplati par sa chaîne de causes au lieu d'être tronqué au message de surface de
+reqwest. L'URL est toujours nommée : un serveur sur le mauvais port ressemble
+exactement à une absence de serveur.
+
+Le refus est détecté de deux façons (`api::refused`) : `is_connect()`, et le
+`io::ErrorKind` en dessous. La première est le test documenté, mais cette
+classification a déjà bougé d'une version de reqwest à l'autre ; l'erreur io, non.
+
+**Pas de refus a priori**, même quand herd sait que son propre `ServerState` est
+`Off` : sonder un serveur lancé hors de herd est un usage assumé, et un serveur
+mort il y a une seconde aussi. On tente, puis on explique.
+
+`p` sur l'écran Server était le cas muet : sans rien qui tourne il n'y a pas de
+nom de modèle à envoyer, et la touche renvoyait `None` sans un mot — impossible
+à distinguer d'une touche non liée.
+
+## `:about` (2026-08-12)
+
+Troisième surimpression locale à côté de `?` (les touches) et `:help` (les
+commandes), pour la troisième question d'un utilisateur bloqué : « qu'est-ce que
+je fais tourner ? ». C'est `--version` à l'écran, plus les faits qui décident du
+comportement sur *cette* machine — `models.ini` chargé, palier, RAM détectée et
+budget qui en découle, répertoire de cache. Tout y est déjà ailleurs (la barre
+latérale a la version, le titre de Models le chemin, l'écran Stats le budget) :
+justement, répondre à cette question ne devrait pas être une visite de quatre
+écrans, et c'est ce qu'un rapport de bug doit contenir.
+
+La ligne « arbre modifié » n'apparaît que lorsqu'elle est vraie. Les chemins sont
+tronqués **par la gauche** : c'est la fin qui identifie un chemin, et une valeur
+coupée par la bordure se lirait comme une valeur qui s'arrête là.
 
 ## Suppression d'un modèle en cache (2026-08-12)
 

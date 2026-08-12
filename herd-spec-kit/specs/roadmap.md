@@ -51,6 +51,8 @@ Status as of 2026-08-12 (herd 0.7.0).
   (`hooks/pre-commit`, installed by `make hooks`)
 - Deleting a cached model (`D` on the Hub screen) behind a prompt that states
   the size and what else in the repo goes with it
+- `:about` — the build stamp and the machine's own facts (config, tier, memory,
+  cache) in one place, rather than spread across four screens
 
 ## Next
 

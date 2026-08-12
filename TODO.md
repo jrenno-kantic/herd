@@ -482,4 +482,84 @@
     - Afterwards the cache is **re-read** rather than assumed: a removal
       that half-succeeded shows up as a row still listed, not as a screen
       quietly disagreeing with the disk.
-- [ ] Add an about command to show an About dialog box
+- [x] identify features requiring llama-server to be serving, and report
+      that no server is running → **three of them**, and all three now say
+      so instead of failing in the plumbing's terms:
+    - `:status` and `:ping <model>` (typed, and `p` on the Server screen)
+      — both reached the network directly and surfaced reqwest's own
+      `error sending request for url (…)`, wrapped again by the Executor
+      into `… unreachable: request failed: …`: two problems on one line,
+      neither of which says the fix is to launch something.
+    - The Test screen's probe already refused out loud (`is_live()`), and
+      still does — but during STARTING the port may not be up yet, so it
+      benefits from the same classification.
+    - `api::unreachable` now does the classifying: a refused connection
+      becomes "nothing is listening on <base> — no llama-server is running
+      (start one with :launch <model>, or :router)"; a **timeout stays a
+      timeout**, since something *did* answer the door and that is a
+      different problem; anything else is flattened through its source
+      chain rather than truncated at reqwest's surface message.
+    - Refusal is detected **two ways** — `is_connect()` and the
+      `io::ErrorKind` beneath — because the first has moved between
+      reqwest releases and the second has not, and falling back silently
+      to the plumbing message is the regression this replaced.
+    - **Not refused up front**, even when herd knows its own state is
+      `Off`: probing a server started outside herd is a supported use, and
+      so is one that died a second ago. Attempt, then explain.
+    - `p` on the Server screen was the silent case — no model name, so it
+      returned `None` without a word, indistinguishable from an unbound
+      key. It says so now.
+    - Pinned end to end by `status_and_ping_say_that_no_server_is_running`,
+      which drives both commands at a real closed loopback port (no
+      network) and fails on either old phrasing.
+
+- [x] Add an about command to show an About dialog box → `:about`, the
+      third local overlay beside `?` (keys) and `:help` (commands),
+      answering the third question a stuck user has: what am I running?
+    - **Not decorative.** It is `--version` on screen — version, commit,
+      commit date — plus the facts that decide behaviour on *this*
+      machine: the loaded `models.ini`, its tier, the RAM detected and the
+      budget that follows, and the cache directory. That is what a bug
+      report is useless without.
+    - Every line of it is already somewhere (sidebar, Models title, Stats
+      screen), and that is the point: answering "what am I running?"
+      should not be a tour of four screens.
+    - The "uncommitted changes — not reproducible" line appears **only
+      when it is true**, in the amber that means "worth noticing".
+    - Values are elided from the **left**, since a path is identified by
+      its end: `…/data/32gb/models.ini` says which config is loaded where
+      `/Users/jrenno/Documents/dev…` says only whose machine it is. A test
+      walks the lines and fails if one runs past the box.
+    - The description comes from `CARGO_PKG_DESCRIPTION` rather than being
+      written out again, so the dialog and the manifest cannot drift.
+    - Answered locally and **before the busy gate**, like `:help` — same
+      reasoning, and now covered by the same test.
+    - It also caught the conformance test being too specific: it asserted
+      `mode == Commands` where it meant "did something visible". A second
+      overlay is exactly the change that assertion should have survived,
+      so it now reads `mode != Browse`.
+
+- [x] In Stats screen: rename "first token" to "TTFT", replace "(first call
+      after loading)" with "(Time to First Token)", append the last and avg
+      values → the line now reads:
+
+      `TTFT   4.20s  (Time to First Token) · last 0.35s · avg 1.63s`
+
+    - `last` and `avg` had to come **back**: measuring only the first call
+      (the previous step) meant nothing tracked the warm model, and these
+      are the other half of the question — the leading figure says how
+      long until it was usable at all, these say what a request costs once
+      it is.
+    - **The leading figure is still cold**, and stays cold: a later, faster
+      probe never replaces it. They are kept apart rather than merged into
+      one number, since a single mean over both drifts towards the warm
+      value the more probes are run and describes neither. There is a test
+      for that.
+    - The warm counters have their own probe count rather than reusing
+      `probes`: a server that sends no `timings` still answers, and
+      averaging it in as a zero would halve the figure.
+    - **One thing the rename costs**, worth knowing: `(Time to First
+      Token)` expands the acronym where `(first call after loading)` said
+      which probe the leading number came from. That fact now lives only
+      in the docs. Say the word and it can be a word on the line —
+      `4.20s cold · last … · avg …` would carry both.

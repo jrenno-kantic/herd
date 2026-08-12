@@ -12,7 +12,7 @@ It is a Rust port and expansion of the `llama-launch.js` idea: that script resol
 | `2` | **Server** | Lifecycle state, model, endpoint, uptime, and the tail of the process output. |
 | `3` | **Router** | llama-server's built-in multi-model mode: how many models stay resident, how long an idle one survives, and the argv that starts it. |
 | `4` | **Test** | Send a chat completion to the running model and see the reply, when it was sent, the latency, token rate, and llama.cpp's own split of prompt-eval vs generation. |
-| `5` | **Stats** | Session counters — start time, uptime, tokens in/out, throughput, time to first token — and the memory budget. |
+| `5` | **Stats** | Session counters — start time, uptime, tokens in/out, throughput, TTFT (cold, last, average) — and the memory budget. |
 | `6` | **Settings** | Every `[server]`, `[*]` and per-model key, overridable — kept in `~/.herd_config`. |
 | `7` | **Logs** | Full log history, scrollable, with a position indicator and a scrollbar. |
 | `8` | **Hub** | What llama.cpp actually has in its cache: every model, its size, what its repo costs on disk, and which preset in this tier uses it. Models no preset names are in **cyan**; `y` copies a `models.ini` stanza for one, `D` deletes one after a confirmation. |
@@ -81,6 +81,34 @@ cargo run -- --version                           # herd 0.1.0 (a1b2c3d 2026-08-1
 `--version` reports the commit the binary was built from, with `-dirty` when it
 came from a tree with uncommitted changes. A version number alone cannot tell
 two builds between releases apart; the commit can.
+
+**`:about` is that answer on screen**, plus the facts that decide how HERD
+behaves on this machine:
+
+```
+┌ About ─────────────────────────────────────────────────────────┐
+│                                                                │
+│  herd 0.7.4                                                    │
+│  Terminal control plane for llama-server                       │
+│                                                                │
+│  build   cd7ed52-dirty · 2026-08-12                            │
+│                uncommitted changes — not reproducible          │
+│                                                                │
+│  config  …enno/Documents/development/herd/data/32gb/models.ini │
+│  tier    32gb                                                  │
+│  memory  36 GiB installed · 27.0 GiB for models                │
+│  cache   /Users/jrenno/.cache/huggingface/hub                  │
+│                                                                │
+│  esc close · ? keys · :help commands                           │
+└────────────────────────────────────────────────────────────────┘
+```
+
+Every line of it is already somewhere — the sidebar has the version, the Models
+title has the path, the Stats screen has the budget — and that is the point:
+answering "what am I running?" should not be a tour of four screens. It is what
+a bug report needs, in one place, and the dirty-tree line only appears when it
+is true. Long paths are elided from the *left*, since the end of a path is what
+identifies it.
 
 ## Keybindings
 
@@ -352,7 +380,8 @@ Counters for the current serving session, reset on every launch so they describe
 │  tokens in   48                                            │
 │  tokens out  200                                           │
 │  throughput  50.0 tok/s avg  ·  51.0 last  ·  51.0 best    │
-│  first token 4.20s  (first call after loading)             │
+│  TTFT        4.20s  (Time to First Token) · last 0.35s ·   │
+│              avg 1.63s                                     │
 └────────────────────────────────────────────────────────────┘
 ```
 
@@ -366,12 +395,18 @@ come apart exactly where it matters: a model paging its weights in can generate
 at a perfectly respectable rate and still leave you looking at nothing for four
 seconds, which throughput alone reports as a healthy session.
 
-It is taken from the **first probe after the model loaded, and no other** —
-that being the only request that measures a cold model. Everything after it is
-answered from resident weights and a warm cache, so keeping a running average
-would drag the figure towards the warm one the more probes you ran, and describe
-neither. Launching again resets it, because the model it describes is cold
-again.
+**The leading figure is the cold one** — the first probe after the model
+loaded, the only request that measures a model whose weights are not yet
+resident. `last` and `avg` follow it and describe the *warm* model, which is the
+other half of the question: the first says how long until it was usable at all,
+these say what it costs per request once it is.
+
+They are kept apart rather than merged into one number, because a mean over both
+drifts towards the warm value the more probes you run and describes neither.
+Launching again resets all of them, since the model is cold once more. If the
+*first* probe's server reported no `timings` the leading figure stays `-`: a
+later probe is warm, so there is no cold measurement to be had that session, and
+promoting one would be a warm number wearing a cold label.
 
 It is derived rather than watched: the probe is deliberately non-streaming — the
 same request `test_call.sh` makes, so the two stay comparable — so nothing sees
@@ -439,6 +474,33 @@ the machine will swap, stall, or have the server killed under load.
 **This changes only herd's own judgement — it does not touch any system
 setting.** On macOS the real GPU limit is `sudo sysctl iogpu.wired_limit_mb=<MB>`;
 herd prints that for you to run yourself rather than running it for you.
+
+## When there is no server
+
+Three things need llama-server to be serving — `:status`, `:ping <model>` (and
+`p` on the Server screen), and the Test screen's probe — and with nothing
+running they now say that:
+
+```
+:status -> nothing is listening on http://127.0.0.1:1234 — no llama-server is
+           running (start one with :launch <model>, or :router)
+```
+
+rather than what they used to say, which was reqwest's account of the plumbing:
+
+```
+:status -> http://127.0.0.1:1234 unreachable: request failed: error sending
+           request for url (http://127.0.0.1:1234/v1/models)
+```
+
+Two problems on one line, and neither half tells you the answer is to launch
+something. A timeout still reads as a timeout — something *did* answer the door,
+which is a different problem — and the endpoint is always named, because a
+server on the wrong port looks exactly like no server at all.
+
+They are deliberately **not refused up front** when HERD knows its own state is
+OFF: a server started outside HERD is a supported thing to probe, and so is one
+that died a second ago. They attempt, then explain.
 
 ## Server lifecycle
 
@@ -586,9 +648,11 @@ The `:` bar remains available for anything faster to type than to navigate:
 - `models` / `reload` -> re-read `models.ini`
 - `launch <model> [-- extra args]` -> launch a preset, hot-swapping any running one
 - `router [--max N] [--idle S]` -> start llama-server's native router, which loads and unloads models on demand (defaults: `--max 2 --idle 300`)
-- `stop`, `status`, `ping <model>`
+- `stop`, `status`, `ping <model>` -> these need a server; with none running they
+  say so, rather than reporting a transport error
 - `cache` -> ask llama.cpp again what it has, after a download or a deletion made outside HERD (also `r` on the Hub screen)
 - `help` -> the list below, as an overlay
+- `about` -> which build this is, and what it is running against
 - `sh <command>` -> run a shell command without leaving the alternate screen
 
 `sh` is all that is left of the generic runner HERD grew out of. `test` and

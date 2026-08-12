@@ -506,7 +506,10 @@ impl Executor {
                     let base = llama::api::base_url(&config.client_host(), config.port());
                     match llama::api::test_chat(&base, &model).await {
                         Ok(reply) => format!("{model} -> {reply}"),
-                        Err(error) => format!("{model} -> error: {error}"),
+                        // The error already says what went wrong and where,
+                        // so it is not wrapped again: "gemma4-12b -> error:
+                        // nothing is listening on …" reads as two problems.
+                        Err(error) => error,
                     }
                 }
             };
@@ -531,7 +534,10 @@ impl Executor {
                             format!("{base} reachable, no models currently loaded")
                         }
                         Ok(models) => format!("{base} reachable, loaded: {}", models.join(", ")),
-                        Err(error) => format!("{base} unreachable: {error}"),
+                        // Likewise: `{base} unreachable: …` in front of a
+                        // message that already names the base read as
+                        // "unreachable: nothing is listening on …".
+                        Err(error) => error,
                     }
                 }
             };
@@ -934,6 +940,70 @@ mod tests {
                 command.usage
             );
         }
+    }
+
+    /// The line this replaced, end to end:
+    ///
+    /// ```text
+    /// :status -> http://127.0.0.1:1234 unreachable: request failed: error
+    ///            sending request for url (http://127.0.0.1:1234/v1/models)
+    /// ```
+    ///
+    /// Two problems in one line — it says "unreachable" and then explains
+    /// it in reqwest's terms, and neither half tells the reader that the
+    /// answer is to launch a model. Both `status` and `ping` reach the
+    /// server the same way and were wrapped the same way.
+    #[tokio::test]
+    async fn status_and_ping_say_that_no_server_is_running() {
+        // A real, closed port on the loopback interface: refused
+        // immediately, no network involved.
+        let port = {
+            let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("bind");
+            let port = listener.local_addr().expect("addr").port();
+            drop(listener);
+            port
+        };
+
+        let config = std::env::temp_dir().join(format!(
+            "herd-status-{}-{:?}.ini",
+            std::process::id(),
+            std::thread::current().id()
+        ));
+        std::fs::write(
+            &config,
+            format!("[server]\nhost = 127.0.0.1\nport = {port}\n\n[a-model]\nhf-repo = v/m:Q4\n"),
+        )
+        .expect("write config");
+
+        for command in ["status", "ping a-model"] {
+            let (tx, mut rx) = mpsc::unbounded_channel();
+            let executor = Executor::new(tx, config.clone());
+            executor.run_command(command.to_string());
+
+            let output = loop {
+                match rx.recv().await.expect("a completion") {
+                    UiEvent::CommandFinished { output, .. } => break output,
+                    _ => continue,
+                }
+            };
+
+            assert!(
+                output.contains("no llama-server is running"),
+                "`:{command}` is still not actionable: {output}"
+            );
+            assert!(
+                !output.contains("error sending request"),
+                "`:{command}` still leaks the plumbing: {output}"
+            );
+            // ...and it must not read as two problems stacked on each
+            // other, which is what wrapping an explained error produced.
+            assert!(
+                !output.contains("unreachable:") && !output.contains("-> error:"),
+                "`:{command}` wraps a message that already explains itself: {output}"
+            );
+        }
+
+        let _ = std::fs::remove_file(&config);
     }
 
     #[test]

@@ -111,6 +111,11 @@ pub enum Mode {
     /// questions ("what does this key do" against "what can I type"), and
     /// one list of both would bury each in the other.
     Commands,
+    /// The `:about` overlay: which build this is, and what it is running
+    /// against. A third reference card beside `Help` and `Commands`,
+    /// answering the third question a stuck user has — "what am I
+    /// running?" — which is otherwise a tour of four screens.
+    About,
     /// About to delete a cached model. Its own mode rather than another
     /// `Confirm` variant: every other prompt asks whether to *start*
     /// something, and answering `y` to the wrong one of those costs a
@@ -266,20 +271,31 @@ pub struct SessionStats {
     pub total_latency: std::time::Duration,
     pub last_rate: Option<f64>,
     pub best_rate: Option<f64>,
-    /// Time to first token, from **the first probe after the model
-    /// loaded** and no other.
+    /// Time to first token from **the first probe after the model loaded**
+    /// — the cold one, and the headline figure.
     ///
-    /// Only that one measures anything: it is the request that finds the
-    /// weights cold and the cache empty. Every probe after it is answered
-    /// by a model already resident and warm, so averaging them together
-    /// produces a number describing neither — and the cold figure, the one
-    /// that answers "how long until this thing is usable", would be
-    /// dragged towards the warm ones the more probes were run.
+    /// Only that request measures a cold model: it finds the weights not
+    /// yet resident and the cache empty. It is kept apart from the running
+    /// figures below rather than averaged into them, because a mean over
+    /// both drifts towards the warm value the more probes are run and
+    /// describes neither.
     ///
     /// `None` until the first probe answers, and `None` afterwards if that
     /// probe's server sent no `timings` — the second probe is not a
     /// stand-in for it.
     pub first_token: Option<std::time::Duration>,
+    /// The most recent probe's time to first token, and the mean over
+    /// every probe that reported one.
+    ///
+    /// These describe the **warm** model, which is the other half of the
+    /// question: `first_token` says how long until it was usable at all,
+    /// and these say what it costs per request once it is. Counted over
+    /// their own probe count rather than `probes`, because a server that
+    /// sends no `timings` still answers and averaging it in as a zero
+    /// would quietly halve the figure.
+    pub last_ttft: Option<std::time::Duration>,
+    pub ttft_probes: usize,
+    pub total_ttft: std::time::Duration,
 }
 
 impl SessionStats {
@@ -304,12 +320,23 @@ impl SessionStats {
             self.best_rate = Some(self.best_rate.map_or(rate, |best| best.max(rate)));
         }
 
+        if let Some(ttft) = outcome.ttft() {
+            self.last_ttft = Some(ttft);
+            self.ttft_probes += 1;
+            self.total_ttft += ttft;
+        }
+
         // The cold-start measurement, taken once. `SessionStats` is reset
         // on every `Starting`, so "the first probe of the session" and
         // "the first call after this model loaded" are the same thing.
         if is_first {
             self.first_token = outcome.ttft();
         }
+    }
+
+    /// Mean time to first token over the probes that reported one.
+    pub fn average_ttft(&self) -> Option<std::time::Duration> {
+        (self.ttft_probes > 0).then(|| self.total_ttft / self.ttft_probes as u32)
     }
 
     /// Output tokens per second across every probe of this session, which
@@ -1453,8 +1480,10 @@ impl App {
 
     fn handle_key(&mut self, key: KeyEvent) -> Action {
         match self.mode {
-            // Both overlays are reference cards, and both close on any key.
-            Mode::Help | Mode::Commands => self.handle_help_key(key),
+            // All three overlays are reference cards, and all close on any
+            // key: hunting for the one that dismisses a help box would be
+            // its own small joke.
+            Mode::Help | Mode::Commands | Mode::About => self.handle_help_key(key),
             Mode::ConfirmDelete => self.handle_delete_key(key),
             Mode::Command => self.handle_command_key(key),
             Mode::Filter => self.handle_filter_key(key),
@@ -1803,9 +1832,19 @@ impl App {
     fn handle_server_key(&mut self, key: KeyEvent) -> Action {
         match key.code {
             KeyCode::Char('s') => self.stop_server(),
+            // A ping needs something to ping. With nothing running there
+            // is no model name to send, and the key used to do nothing at
+            // all — indistinguishable from a key that is not bound, or
+            // from herd having ignored the press.
             KeyCode::Char('p') => match self.llama.server.model.clone() {
                 Some(model) => self.run(format!("ping {model}")),
-                None => Action::None,
+                None => {
+                    self.push_log(
+                        "nothing to ping — no llama-server is running \
+                         (start one with enter, or :router)",
+                    );
+                    Action::None
+                }
             },
             KeyCode::Enter => match self.llama.relaunch_blocked() {
                 Some(reason) => {
@@ -2444,14 +2483,20 @@ impl App {
             return self.dispatch_stop();
         }
 
-        // `help` is answered here rather than dispatched, for the same
-        // reason as `models` below: it is local text, and there is nothing
-        // to run. It also has to work while something is in flight —
-        // "what can I type" is a question people ask *because* they are
-        // stuck — so it is checked before the busy gate, like `stop`.
-        if command == "help" {
+        // `help` and `about` are answered here rather than dispatched, for
+        // the same reason as `models` below: they are local text, and
+        // there is nothing to run. They also have to work while something
+        // is in flight — "what can I type" and "what am I running" are
+        // questions people ask *because* they are stuck — so they are
+        // checked before the busy gate, like `stop`.
+        let overlay = match command.as_str() {
+            "help" => Some(Mode::Commands),
+            "about" => Some(Mode::About),
+            _ => None,
+        };
+        if let Some(mode) = overlay {
             self.command_input.clear();
-            self.mode = Mode::Commands;
+            self.mode = mode;
             return Action::None;
         }
 
@@ -3858,6 +3903,43 @@ alias = qwen3-coder
         }
     }
 
+    /// Every feature that talks to the server has to say so when there is
+    /// none, rather than failing in the plumbing's terms or — worse —
+    /// doing nothing at all.
+    ///
+    /// `p` on the Server screen was the silent case: with nothing running
+    /// there is no model name to ping, and the key returned `None` without
+    /// a word, which is indistinguishable from a key that is not bound.
+    /// The Test screen's Enter already refused out loud, and `:status` and
+    /// `:ping` now explain themselves from `api::unreachable`.
+    #[test]
+    fn pinging_with_no_server_says_so_rather_than_nothing() {
+        let mut app = app_with_sample();
+        app.screen = Screen::Server;
+        assert!(app.llama.server.model.is_none());
+
+        let logs = app.logs.len();
+        assert!(matches!(app.update(ch('p')), Action::None));
+        assert!(app.logs.len() > logs, "the key did nothing at all");
+        assert!(app
+            .logs
+            .back()
+            .is_some_and(|line| line.contains("no llama-server is running")));
+    }
+
+    /// The Test screen's own guard, for the same question asked a
+    /// different way.
+    #[test]
+    fn a_chat_probe_with_no_server_refuses_before_the_network() {
+        let mut app = app_with_sample();
+        jump(&mut app, Screen::Test);
+
+        let logs = app.logs.len();
+        assert!(matches!(app.update(key(KeyCode::Enter)), Action::None));
+        assert!(!app.llama.chat_pending, "a probe was dispatched anyway");
+        assert!(app.logs.len() > logs, "the key did nothing at all");
+    }
+
     /// Stop is the command you reach for when something else is stuck, so
     /// gating it on nothing else being in flight had it refuse exactly when
     /// it was needed: a launch that was slow to spawn — or slow to be
@@ -3902,15 +3984,32 @@ alias = qwen3-coder
         assert_eq!(app.mode, Mode::Browse);
     }
 
-    /// "What can I type" is a question people ask *because* something is
-    /// stuck, so the busy gate must not be what answers it.
+    /// "What can I type" and "what am I running" are questions people ask
+    /// *because* something is stuck, so the busy gate must not be what
+    /// answers them.
     #[test]
-    fn help_is_answered_while_a_command_is_in_flight() {
-        let mut app = app_with_sample();
-        app.running = true;
+    fn the_local_overlays_are_answered_while_a_command_is_in_flight() {
+        for (typed, expected) in [("help", Mode::Commands), ("about", Mode::About)] {
+            let mut app = app_with_sample();
+            app.running = true;
 
-        assert!(matches!(submit(&mut app, "help"), Action::None));
-        assert_eq!(app.mode, Mode::Commands);
+            assert!(matches!(submit(&mut app, typed), Action::None), "{typed}");
+            assert_eq!(app.mode, expected, "{typed}");
+        }
+    }
+
+    /// `:about` answers on the spot too, and closes on any key.
+    #[test]
+    fn about_opens_the_build_details_rather_than_running_anything() {
+        let mut app = app_with_sample();
+
+        assert!(matches!(submit(&mut app, "about"), Action::None));
+        assert_eq!(app.mode, Mode::About);
+        assert!(!app.running, "the dialog is local, nothing was queued");
+        assert!(app.command_input.is_empty());
+
+        app.update(ch('x'));
+        assert_eq!(app.mode, Mode::Browse);
     }
 
     /// The other half of `every_documented_command_reaches_a_handler`
@@ -3930,8 +4029,12 @@ alias = qwen3-coder
                 other => panic!("`:{}` was dispatched instead: {other:?}", command.usage),
             }
 
+            // "Visible" is either an overlay or a log line — the two ways
+            // a local command can answer. Named that way rather than as
+            // one specific mode, so a command that opens a *different*
+            // overlay still counts.
             assert!(
-                app.mode == Mode::Commands || app.logs.len() > logs,
+                app.mode != Mode::Browse || app.logs.len() > logs,
                 "`:{}` did nothing visible at all",
                 command.usage
             );

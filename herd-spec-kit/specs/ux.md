@@ -12,7 +12,7 @@ Inspired by lazygit and k9s: dense, keyboard-first, one screen per concern.
 | `2` | Server | Lifecycle state, endpoint, uptime, recent output |
 | `3` | Router | llama-server's own multi-model mode + the argv it would start |
 | `4` | Test | Chat probe against the running model: reply, latency, token rate |
-| `5` | Stats | Session counters, time to first token, and the memory budget |
+| `5` | Stats | Session counters, TTFT (cold, last, average), and the memory budget |
 | `6` | Settings | Editable `[server]` / `[*]` / per-model keys |
 | `7` | Logs | Full history |
 | `8` | Hub | What llama.cpp has in its cache: size, disk, and the preset using it |
@@ -45,10 +45,15 @@ one where letters are shortcuts; every other mode captures text until `Enter` or
   *start* something, and answering the wrong one of those costs a launch. This
   one costs the download
 - `Help` - the `?` reference card for keys; any key dismisses it
-- `Commands` - the `:help` listing of what the command bar accepts. Separate
-  from `Help` because the two answer different questions — "what does this key
-  do" against "what can I type" — and one list of both would bury each in the
-  other
+- `Commands` - the `:help` listing of what the command bar accepts
+- `About` - the `:about` dialog: which build this is, and what it is running
+  against
+
+`Help`, `Commands` and `About` are three overlays rather than one because they
+answer three different questions — "what does this key do", "what can I type",
+"what am I running" — and a single list of all three would bury each in the
+others. All three close on any key, and all three are answered locally, before
+the busy gate: they are what a stuck user reaches for.
 
 ## Keybindings
 
@@ -147,6 +152,13 @@ the whole buffer fits.
   responding rather than left reading SERVING
 - Lowering the memory reservation below the system default raises a standing red
   caution — the override is allowed, never silent
+- **Anything that needs a running server says so when there is none.**
+  `:status`, `:ping` (and `p` on the Server screen) and the Test screen's probe
+  report "nothing is listening on <endpoint> — no llama-server is running", with
+  the two ways to start one, rather than the HTTP client's account of the
+  plumbing. A timeout stays a timeout: something answered the door, which is a
+  different problem. They attempt first rather than refusing on herd's own
+  state, since a server started outside herd is a supported thing to probe
 - Config errors render in the Models screen and never abort the UI
 - The command bar names what the typed line would run, so a typo reads as
   `unknown` before Enter rather than after it

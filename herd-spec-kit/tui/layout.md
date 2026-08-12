@@ -60,8 +60,10 @@ Terminal geometry, built in `layout.rs`.
 - Modals are centred over the whole frame, each clamped so it still fits in a
   terminal smaller than the modal itself: the launch confirmation (port in use /
   too large / not downloaded), the quit confirmation, the `models.ini` picker,
-  the `?` key reference and the `:help` command listing. The listing sizes
-  itself from its content and elides visibly when the terminal is narrower
+  the `?` key reference, the `:help` command listing and the `:about` dialog.
+  The listing sizes itself from its content and elides visibly when the
+  terminal is narrower; the About dialog elides its paths from the *left*,
+  since a path is identified by its end
 - The status bar leads with the lifecycle tag, coloured by state, then the model,
   the phase within that state, the elapsed time, endpoint and a hint for the
   current mode

@@ -1,7 +1,7 @@
 use crate::{
     app::{App, Mode, Screen},
     components::{
-        command_bar, command_help, confirm, help, hub, logs, models, picker, router, server,
+        about, command_bar, command_help, confirm, help, hub, logs, models, picker, router, server,
         settings, sidebar, stats, status, test,
     },
     layout,
@@ -80,6 +80,9 @@ pub fn render(frame: &mut Frame, app: &App) {
     }
     if app.mode == Mode::ConfirmDelete {
         confirm::render_delete(frame, app, frame.area());
+    }
+    if app.mode == Mode::About {
+        about::render(frame, app, frame.area());
     }
 }
 
@@ -237,7 +240,7 @@ spec-type = draft-mtp
         }
 
         for width in [100, 120] {
-            for screen in [Screen::Models, Screen::Hub, Screen::Router] {
+            for screen in [Screen::Models, Screen::Hub, Screen::Router, Screen::Stats] {
                 app.screen = screen;
                 println!(
                     "\n=== {screen:?} at {width} ===\n{}",
@@ -245,11 +248,13 @@ spec-type = draft-mtp
                 );
             }
 
-            app.mode = Mode::Commands;
-            println!(
-                "\n=== :help at {width} ===\n{}",
-                frame_text(&app, width, 32)
-            );
+            for mode in [Mode::Commands, Mode::About] {
+                app.mode = mode;
+                println!(
+                    "\n=== {mode:?} at {width} ===\n{}",
+                    frame_text(&app, width, 32)
+                );
+            }
             app.mode = Mode::Browse;
         }
     }
@@ -402,6 +407,55 @@ spec-type = draft-mtp
             "the unreferenced model is not counted: {text}"
         );
         assert!(text.contains("y copy preset"), "no copy hint: {text}");
+    }
+
+    /// The TTFT line grew a `last` and an `avg` and now carries three
+    /// figures. The Stats block does *not* size itself to the terminal —
+    /// it is a fixed field list — so the longest form has to fit the
+    /// narrowest terminal herd is used on, or the average silently falls
+    /// off the right edge.
+    #[test]
+    fn the_ttft_line_fits_a_hundred_column_terminal() {
+        use crate::services::llama::api::ChatOutcome;
+        use std::time::Duration;
+
+        let mut app = sample_app();
+        app.screen = Screen::Stats;
+
+        for (latency, predicted) in [(6u64, 1_000.0), (2, 1_000.0)] {
+            app.update(crate::event::UiEvent::ChatResult(Box::new(Ok(
+                ChatOutcome {
+                    latency: Duration::from_secs(latency),
+                    predicted_ms: Some(predicted),
+                    ..ChatOutcome::sample()
+                },
+            ))));
+        }
+
+        let text = frame_text(&app, 100, 40);
+        assert!(text.contains("TTFT"), "{text}");
+        assert!(text.contains("(Time to First Token)"), "{text}");
+        assert!(
+            text.contains("last 1.00s"),
+            "the last figure is cut: {text}"
+        );
+        assert!(text.contains("avg 3.00s"), "the average is cut: {text}");
+    }
+
+    /// `:about` is `--version` on screen, plus the facts that decide how
+    /// herd behaves on this machine — the things a bug report is useless
+    /// without.
+    #[test]
+    fn the_about_dialog_names_the_build_and_what_it_runs_against() {
+        let mut app = sample_app();
+        app.mode = Mode::About;
+
+        let text = frame_text(&app, 120, 40);
+        assert!(text.contains("About"), "{text}");
+        assert!(text.contains(crate::version::NUMBER), "no version: {text}");
+        assert!(text.contains(crate::version::COMMIT), "no commit: {text}");
+        assert!(text.contains("herd-render-"), "no config path: {text}");
+        assert!(text.contains("GiB"), "no memory line: {text}");
     }
 
     /// The one destructive prompt in the program has to say what goes,
@@ -783,6 +837,7 @@ spec-type = draft-mtp
             Mode::Picker,
             Mode::ConfirmLaunch,
             Mode::ConfirmDelete,
+            Mode::About,
         ] {
             app.mode = mode;
             let _ = frame_text(&app, 20, 6);

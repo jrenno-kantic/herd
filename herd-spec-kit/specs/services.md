@@ -17,7 +17,13 @@ The product. Ten modules:
   `/v1/models` is parsed leniently: llama-server has shipped both the OpenAI
   shape (`{"data":[{"id":...}]}`) and an Ollama-flavoured one
   (`{"models":[{"name":...}]}`), and only accepting the first reports "no
-  models loaded" against a server that is plainly serving one
+  models loaded" against a server that is plainly serving one.
+  `unreachable` classifies a failed request rather than passing the client's
+  message through: a refused connection is reported as "no llama-server is
+  running" with the two ways to start one, a timeout as a timeout, and anything
+  else through its full source chain. Refusal is detected both by
+  `is_connect()` and by the `io::ErrorKind` underneath, since the first has
+  moved between reqwest releases and the second has not
 - `overrides.rs` - setting overrides, emitted as argv, persisted by `prefs`
 - `prefs.rs` - `~/.herd_config`: favourites, overrides and the router numbers.
   What the user *chose*, as against `session.rs`, which records where the

@@ -39,7 +39,8 @@ record of what a project used to be belongs.
 - Override the share of memory reserved for the OS, with a standing caution
 - Copy the exact launch command, or a models.ini stanza, to the clipboard
 - Read the process output while it runs, scrollable, with a position indicator
-- Ask what can be typed, and what a key does, without leaving the screen
+- Ask what can be typed, what a key does, and which build this is, without
+  leaving the screen
 - Quit without losing work in flight, and without leaving a server running
 
 ## Design Principles
