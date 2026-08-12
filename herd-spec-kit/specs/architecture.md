@@ -63,8 +63,8 @@ stays pure.
   (shell)
 - `components/` : read-only renderers over `App` — one per screen
   (`models`, `hub`, `server`, `router`, `test`, `stats`, `settings`, `logs`),
-  plus `sidebar`, `command_bar`, `status`, and the `confirm` / `picker` /
-  `help` / `command_help` modals
+  plus `sidebar`, `command_bar`, `status`, and the overlays — `confirm`
+  (launch, quit and delete), `picker`, `help`, `command_help` and `about`
 - `layout.rs`, `theme.rs` : geometry and styles
 - `hooks/pre-commit` : bumps the patch version on every commit (`make hooks`)
 

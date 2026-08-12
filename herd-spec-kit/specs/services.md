@@ -2,7 +2,7 @@
 
 ## Llama Service (`services/llama/`)
 
-The product. Ten modules:
+The product. Nine modules:
 
 - `ini.rs` - parses `models.ini`, builds llama-server argv as a `Vec<String>`
   (never a shell string, so no quoting bugs), resolves which config file to use,

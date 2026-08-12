@@ -23,7 +23,7 @@ the cache is holding; menu order follows how often a screen is wanted, not how
 closely it relates to its neighbour.
 
 ```
-┌HERD 0.7.1────────────┐┌ Models · 32gb · ~/models/32gb/models.ini ────────────────────── 1/8 ┐
+┌HERD 0.7.5────────────┐┌ Models · 32gb · ~/models/32gb/models.ini ────────────────────── 1/8 ┐
 │ ▸ 1 Models           ││   NAME            REPO              RAM     OPT CAPS SPEC   LOCAL   │
 │   2 Server           ││▸★●gemma4-12b      unsloth/gemma-4…  7.3G  qat ud    S  mtp         █│
 │   3 Router           ││  ★gemma4-31b      unsloth/gemma-4…~18.3G  qat ud    S  mtp not local│
@@ -75,7 +75,7 @@ appears once the clipboard has actually taken it; if no clipboard tool answered
 cargo run
 cargo run -- --config ~/models/16gb/models.ini   # pick a specific preset file
 cargo run -- --help
-cargo run -- --version                           # herd 0.1.0 (a1b2c3d 2026-08-11)
+cargo run -- --version                           # herd 0.7.5 (a1b2c3d 2026-08-12)
 ```
 
 `--version` reports the commit the binary was built from, with `-dirty` when it
@@ -88,7 +88,7 @@ behaves on this machine:
 ```
 ┌ About ─────────────────────────────────────────────────────────┐
 │                                                                │
-│  herd 0.7.4                                                    │
+│  herd 0.7.5                                                    │
 │  Terminal control plane for llama-server                       │
 │                                                                │
 │  build   cd7ed52-dirty · 2026-08-12                            │
@@ -451,7 +451,7 @@ count and how many of them exceed the current budget:
 ```
 ┌ Select models.ini ─────────────────────────────────────────────────┐
 │  budget 12.0 GiB usable of 16 GiB installed                        │
-│   16gb      12 presets                                             │
+│   16gb      13 presets                                             │
 │     ~/models/16gb/models.ini                                       │
 │ ▸• 32gb       8 presets  ⚠ 5 exceed this machine                   │
 │     ~/models/32gb/models.ini                                       │
@@ -575,9 +575,9 @@ The repo carries a snapshot of the preset tiers in `data/`:
 
 ```
 data/
-├── 16gb/models.ini      12 presets, 4B–14B: Qwen 3.5 4B/9B (±MTP), Gemma 4 E4B,
+├── 16gb/models.ini      13 presets, 4B–27B: Qwen 3.5 4B/9B (±MTP), Gemma 4 E4B,
 │                        Qwen3 4B, Gemma 3 4B, Phi-4 Mini, Nemotron 3 Nano 4B,
-│                        Gemma 4 12B, Qwen3-VL 8B, Qwen3 14B
+│                        Gemma 4 12B, Qwen3-VL 8B, Qwen3 14B, Bonsai 27B
 ├── 32gb/models.ini       8 presets, 12B–35B: Gemma 4 12B/26B/31B, Qwen 3.6 27B/35B,
 │                        Qwen3 Coder 30B, Qwen3-VL 8B, Qwen3 14B
 ├── scripts/llama-launch.js

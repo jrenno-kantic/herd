@@ -383,8 +383,8 @@ RAM disponible. Le détail des invariants est dans `CLAUDE.md` ; en résumé :
    `gemma-4-31B` sur cette machine), ce qu'aucun `find` n'aurait vu.
    `Availability::Unknown` tant que la réponse n'est pas arrivée : annoncer
    à tort « à télécharger » est la seule erreur coûteuse ici.
-2. **Colonne LOCAL** sur l'écran Models. Sur le palier 16gb, 8 presets sur
-   12 ne sont pas présents localement.
+2. **Colonne LOCAL** sur l'écran Models. Sur le palier 16gb, 10 presets sur
+   13 ne sont pas présents localement.
 3. **Entrée sur un preset absent demande confirmation**, puis télécharge
    *et* lance. **`d`** télécharge sans lancer.
 4. **Téléchargement délégué au CLI `hf`** : il possède le format du cache
