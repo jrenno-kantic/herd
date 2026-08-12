@@ -1,6 +1,6 @@
 [package]
 name = "herd"
-version = "0.2.1"
+version = "0.5.0"
 edition = "2021"
 # The floor that has actually been built and tested, not a probe of the
 # true minimum. Edition 2024 is a separate, deliberate migration: it makes
