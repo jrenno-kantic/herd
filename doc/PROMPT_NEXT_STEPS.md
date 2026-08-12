@@ -456,6 +456,63 @@ cache de llama.cpp est **mesurable**, il n'a plus à être deviné.
   précédente (`scripts.rs`) avait dérivé — ni `reload`, ni `cache`, et un
   « écran 3 » devenu faux à l'insertion du Router.
 
+## Profil `[mono-focus]` et un bug d'argv (2026-08-12)
+
+Un jeu de flags nommé, activable **par preset**, pour ce que l'ini ne sait pas
+dire autrement : un seul client qui boucle sur le même prompt de base, et qui
+veut garder son cache KV plutôt que de le partager.
+
+**C'est un nom de section réservé**, comme `server` et `*`, et c'est tout le
+mécanisme : toute autre section du fichier est un preset, donc sans réservation
+le profil apparaîtrait dans l'écran Models comme un modèle lançable sans
+`hf-repo` — compté dans le palier et proposé à `Enter`. `ini::is_reserved` est
+le seul endroit où cette liste vit.
+
+Précédence : `[server] → [*] → [model] → mono-focus → overrides → CLI`. **Après**
+le preset, puisqu'on l'active justement pour forcer un comportement que la
+section du modèle contredit ; **avant** les overrides, pour qu'une seule de ses
+clés puisse être reprise depuis l'écran Settings sans toucher au fichier.
+
+L'interrupteur est un *choix* : il vit dans `~/.herd_config` à côté des favoris,
+par nom de preset, désactivé par défaut. Les clés du profil ne sont listées
+**que lorsqu'il est actif** — des lignes qui ont l'air éditables sans être en
+vigueur valent moins que pas de lignes du tout — et l'en-tête porte l'état, une
+section absente et une section désactivée étant sinon indiscernables.
+
+**Le bug trouvé en chemin.** `argv_preview` appliquait les overrides de session
+et `Executor::spawn_launch` ne les appliquait pas : l'écran Models affichait un
+`--ctx-size 65536` que le processus lancé ne voyait jamais. Silencieusement,
+depuis que l'écran Settings existe. `LaunchSettings::argv` est désormais le seul
+endroit où l'argv d'un lancement est assemblé, et l'Executor reçoit ces réglages
+avant chaque commande — même forme que `set_config_path`, même raison.
+
+## L'aperçu argv défile et s'ajuste à son cadre (2026-08-12)
+
+L'aperçu était tronqué dans les deux sens, et c'est exactement la faute que
+`Columns::for_width` et `screen_hint_within` existent pour empêcher ailleurs.
+
+**En largeur.** `wrap_argv` coupait à 40 colonnes en dur et ne mesurait que le
+*drapeau* pour décider de couper : `--hf-repo` tenait, et la référence de dépôt
+de 42 caractères qui suit débordait, coupée par le terminal. Il s'ajuste
+désormais à la largeur réelle du cadre et mesure **l'option entière, drapeau et
+valeur ensemble** — une option est une unité, jamais scindée. Une option plus
+longue que le cadre est repliée ici, pas laissée au terminal : le nombre de
+lignes rendu est ainsi celui qui est compté.
+
+**En hauteur.** Six lignes suffisent à un preset ordinaire ; un preset avec
+`[mono-focus]` actif, ou un terminal en 80 colonnes, non. `J`/`K` font défiler,
+une barre apparaît sur la bordure droite, et **les deux seulement quand quelque
+chose est caché** — annoncer une touche qui ne ferait rien est un mensonge de
+plus.
+
+Le défilement est borné **dans `App::update`**, pas au dessin : `render` reste
+une fonction pure de `App`, et l'autre solution est un compteur qui grimpe
+pendant que la vue ne bouge plus. `App` doit donc connaître la géométrie du
+cadre — `preview_pane` la compte à la main comme `chrome`, d'où la largeur
+ajoutée à `UiEvent::Resize`. Le rendu reborne contre le cadre réellement obtenu,
+et un redimensionnement reborne aussi : un terminal plus large replie le même
+argv en moins de lignes.
+
 ## TTFT : trois chiffres, le premier à froid (2026-08-12)
 
 ```

@@ -19,6 +19,15 @@ pub struct Executor {
     /// `App` when the user switches tier, so the Models screen and the
     /// Executor can never disagree about which file is in play.
     config_path: Arc<RwLock<PathBuf>>,
+    /// The session overrides and the mono-focus toggles, refreshed from
+    /// `App` before every command.
+    ///
+    /// Without this the Executor built a launch from the ini alone, so the
+    /// Settings screen changed the argv *preview* and nothing else: the
+    /// process herd spawned never saw an override. Same class of mistake
+    /// as an Executor pointing at the previous tier, and closed the same
+    /// way — the UI owns the state, the Executor is told.
+    launch: Arc<RwLock<llama::ini::LaunchSettings>>,
 }
 
 impl Executor {
@@ -28,7 +37,24 @@ impl Executor {
             llama: Supervisor::new(),
             download: Arc::new(tokio::sync::Mutex::new(None)),
             config_path: Arc::new(RwLock::new(config_path)),
+            launch: Arc::new(RwLock::new(llama::ini::LaunchSettings::default())),
         }
+    }
+
+    /// Takes the UI's launch state before a command runs, so a launch
+    /// spawns what the argv preview drew.
+    pub fn set_launch_settings(&self, settings: llama::ini::LaunchSettings) {
+        if let Ok(mut slot) = self.launch.write() {
+            *slot = settings;
+        }
+    }
+
+    /// Snapshot, cloned out immediately so no lock is held across an await.
+    fn launch_settings(&self) -> llama::ini::LaunchSettings {
+        self.launch
+            .read()
+            .map(|slot| slot.clone())
+            .unwrap_or_default()
     }
 
     /// Follows a tier switch made in the UI. Without this, launching after
@@ -381,6 +407,7 @@ impl Executor {
         let tx = self.tx.clone();
         let supervisor = self.llama.clone();
         let config_path = self.config_path();
+        let launch = self.launch_settings();
 
         tokio::spawn(async move {
             let guard = CompletionGuard::new(tx.clone(), format!("launch {rest}"));
@@ -412,7 +439,9 @@ impl Executor {
                 return guard.complete(format!("port {port} busy, waiting for confirmation"));
             }
 
-            let args = match llama::ini::build_model_args(&config, &model, &extra) {
+            // The same call the argv preview makes, so what is spawned is
+            // what was drawn — overrides and mono-focus included.
+            let args = match launch.argv(&config, &model, &extra) {
                 Ok(args) => args,
                 Err(error) => return guard.complete(error),
             };

@@ -170,7 +170,10 @@ spec-type = draft-mtp
         let text = frame_text(&app, 120, 40);
 
         assert!(text.contains("gemma4-12b"), "preset row missing");
-        assert!(text.contains("unsloth/gemma-4-12B"), "repo column missing");
+        assert!(
+            text.contains("unsloth/gemma-4-12B"),
+            "repo column missing:\n{text}"
+        );
         assert!(text.contains("32768"), "inherited ctx-size missing");
         assert!(text.contains("llama-server"), "argv preview missing");
     }
@@ -190,6 +193,66 @@ spec-type = draft-mtp
                 "no copy hint on the argv preview at {width} columns"
             );
         }
+    }
+
+    /// An argv taller than its pane used to be cut off with nothing to
+    /// say so — the same silent loss the table and the footers were fixed
+    /// for. Now the pane says there is more, and the key that reaches it
+    /// is named on the border only while there is.
+    #[test]
+    fn a_preview_that_overflows_says_so_and_scrolls() {
+        let mut app = App::with_config_path(shipped("32gb"));
+        // The real case this was written for: `[mono-focus]` adds five
+        // more flags, and the argv stops fitting in the six rows it has.
+        app.llama.mono_focus.insert("gemma4-12b".into());
+        // ...on an 80-column terminal, where they wrap into nine lines.
+        app.update(crate::event::UiEvent::Resize {
+            width: 80,
+            height: 40,
+        });
+
+        let text = frame_text(&app, 80, 40);
+        assert!(text.contains("J/K scroll"), "no scroll hint:\n{text}");
+        assert!(
+            text.contains('█') || text.contains('║'),
+            "no scrollbar:\n{text}"
+        );
+
+        // The last line is off the bottom until it is scrolled to.
+        let last = crate::components::wrap_argv(&app.llama.argv_preview().expect("argv"), 80 - 26)
+            .pop()
+            .expect("a line");
+        assert!(!text.contains(last.trim()), "nothing was hidden:\n{text}");
+
+        for _ in 0..app.preview_max_scroll() {
+            app.update(crate::event::UiEvent::Key(crossterm::event::KeyEvent::new(
+                crossterm::event::KeyCode::Char('J'),
+                crossterm::event::KeyModifiers::NONE,
+            )));
+        }
+        let scrolled = frame_text(&app, 80, 40);
+        assert!(
+            scrolled.contains(last.trim()),
+            "the last line never came into view:\n{scrolled}"
+        );
+    }
+
+    /// ...and a preview that fits advertises nothing, because pressing the
+    /// key would do nothing.
+    #[test]
+    fn a_preview_that_fits_shows_no_scroll_hint() {
+        let mut app = sample_app();
+        app.update(crate::event::UiEvent::Resize {
+            width: 160,
+            height: 40,
+        });
+
+        let text = frame_text(&app, 160, 40);
+        assert!(text.contains("y copy"), "{text}");
+        assert!(
+            !text.contains("J/K scroll"),
+            "hint with nothing to scroll:\n{text}"
+        );
     }
 
     #[test]
@@ -228,8 +291,7 @@ spec-type = draft-mtp
     fn show_the_new_screens() {
         let mut app = App::with_config_path(shipped("32gb"));
         app.llama.favorites.insert("gemma4-12b".into());
-        app.update(crate::event::UiEvent::Resize { height: 32 });
-
+        app.llama.mono_focus.insert("gemma4-12b".into());
         // The real cache of the machine this is run on, sizes and all —
         // the Hub screen is not worth looking at against a fixture.
         if let Ok(cached) = tokio::runtime::Runtime::new()
@@ -239,7 +301,12 @@ spec-type = draft-mtp
             app.update(crate::event::UiEvent::CacheList(cached));
         }
 
-        for width in [100, 120] {
+        for width in [80, 100, 120] {
+            // Told the size it is drawn at: the argv preview's scroll bound
+            // is derived from this, so a probe that skipped it would be
+            // looking at a pane the app thinks is a different shape.
+            app.update(crate::event::UiEvent::Resize { width, height: 32 });
+
             for screen in [Screen::Models, Screen::Hub, Screen::Router, Screen::Stats] {
                 app.screen = screen;
                 println!(
@@ -303,7 +370,7 @@ spec-type = draft-mtp
             app.screen = screen;
 
             for height in [24, 40, 60] {
-                app.update(crate::event::UiEvent::Resize { height });
+                app.update(crate::event::UiEvent::Resize { width: 120, height });
 
                 let drawn = frame_text(&app, 120, height)
                     .lines()
@@ -407,6 +474,29 @@ spec-type = draft-mtp
             "the unreferenced model is not counted: {text}"
         );
         assert!(text.contains("y copy preset"), "no copy hint: {text}");
+    }
+
+    /// The Settings screen carries the profile's state in its heading,
+    /// because an absent section and a switched-off one look identical
+    /// otherwise — and its keys appear only while it is on.
+    #[test]
+    fn the_settings_screen_shows_the_mono_focus_state() {
+        let mut app = App::with_config_path(shipped("32gb"));
+        app.screen = Screen::Settings;
+
+        let off = frame_text(&app, 120, 40);
+        assert!(off.contains("[mono-focus]"), "{off}");
+        assert!(off.contains("m to enable"), "{off}");
+        assert!(!off.contains("cache-reuse"), "keys shown while off: {off}");
+
+        app.update(crate::event::UiEvent::Key(crossterm::event::KeyEvent::new(
+            crossterm::event::KeyCode::Char('m'),
+            crossterm::event::KeyModifiers::NONE,
+        )));
+
+        let on = frame_text(&app, 120, 40);
+        assert!(on.contains("m to disable"), "{on}");
+        assert!(on.contains("cache-reuse"), "keys hidden while on: {on}");
     }
 
     /// The TTFT line grew a `last` and an `avg` and now carries three

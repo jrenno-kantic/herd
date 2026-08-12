@@ -45,8 +45,22 @@ pub struct LlamaConfig {
     pub path: PathBuf,
     pub server: Section,
     pub defaults: Section,
+    /// The optional `[mono-focus]` profile: a named set of flags applied on
+    /// top of a preset when the user switches it on, for the case the ini
+    /// cannot otherwise express — one client, looping on the same base
+    /// prompt, wanting the KV cache kept rather than shared out.
+    ///
+    /// A **reserved section name**, like `server` and `*`, and that is the
+    /// whole of how it is "handled": it is parsed out of `models` so it can
+    /// never appear as a launchable preset, be counted in a tier, or be
+    /// selected on the Models screen. A section with no `hf-repo` that the
+    /// table offered to launch would be a preset that cannot run.
+    pub mono_focus: Section,
     pub models: Vec<(String, Section)>,
 }
+
+/// The name of that section, spelled once.
+pub const MONO_FOCUS: &str = "mono-focus";
 
 impl LlamaConfig {
     pub fn model_names(&self) -> Vec<&str> {
@@ -313,6 +327,7 @@ pub fn load(path: &Path) -> Result<LlamaConfig, String> {
 fn parse(text: &str, path: &Path) -> LlamaConfig {
     let mut server = Section::default();
     let mut defaults = Section::default();
+    let mut mono_focus = Section::default();
     let mut models: Vec<(String, Section)> = Vec::new();
     let mut current: Option<String> = None;
 
@@ -326,7 +341,7 @@ fn parse(text: &str, path: &Path) -> LlamaConfig {
         if line.starts_with('[') && line.ends_with(']') {
             let name = line[1..line.len() - 1].trim().to_string();
             current = Some(name.clone());
-            if name != "server" && name != "*" && !models.iter().any(|(n, _)| n == &name) {
+            if !is_reserved(&name) && !models.iter().any(|(n, _)| n == &name) {
                 models.push((name, Section::default()));
             }
             continue;
@@ -352,6 +367,7 @@ fn parse(text: &str, path: &Path) -> LlamaConfig {
         match section_name.as_str() {
             "server" => server.set(&key, &value),
             "*" => defaults.set(&key, &value),
+            MONO_FOCUS => mono_focus.set(&key, &value),
             name => {
                 if let Some((_, section)) = models.iter_mut().find(|(n, _)| n == name) {
                     section.set(&key, &value);
@@ -364,8 +380,16 @@ fn parse(text: &str, path: &Path) -> LlamaConfig {
         path: path.to_path_buf(),
         server,
         defaults,
+        mono_focus,
         models,
     }
+}
+
+/// Section names that are not presets. Everything else in the file is one,
+/// which is why adding a profile means adding it here — a section the
+/// parser does not know becomes a model that cannot launch.
+fn is_reserved(name: &str) -> bool {
+    matches!(name, "server" | "*" | MONO_FOCUS)
 }
 
 /// Mirrors `llama-launch.js`'s two special cases exactly: only the bare
@@ -428,11 +452,56 @@ impl OptionMap {
     }
 }
 
-/// argv for launching a *single* model directly:
-/// `llama-server <flags>`, precedence `[server] -> [*] -> [model] -> CLI`.
+/// What a launch needs that the ini does not carry: the session overrides,
+/// and which presets have the `[mono-focus]` profile switched on.
+///
+/// It exists because the preview and the launch **must build the same
+/// argv**, and for a long time they did not: `argv_preview` passed the
+/// overrides and `Executor::spawn_launch` did not, so the Models screen
+/// showed a `--ctx-size` the spawned process never saw. Both now go
+/// through [`LaunchSettings::argv`], which is the only place the pieces
+/// are assembled.
+#[derive(Debug, Clone, Default)]
+pub struct LaunchSettings {
+    pub overrides: super::Overrides,
+    /// Presets with mono-focus on, by name — the same keying as favourites
+    /// and overrides, since a preset is the same model in either tier.
+    pub mono_focus: std::collections::BTreeSet<String>,
+}
+
+impl LaunchSettings {
+    pub fn mono_focus_on(&self, model: &str) -> bool {
+        self.mono_focus.contains(model)
+    }
+
+    /// The exact argv a launch of `model` would spawn. `cli` is what
+    /// followed a bare `--` on a typed `:launch`, and stays last so an
+    /// explicit instruction still wins over everything remembered.
+    pub fn argv(
+        &self,
+        config: &LlamaConfig,
+        model: &str,
+        cli: &[String],
+    ) -> Result<Vec<String>, String> {
+        let mut extra = self.overrides.to_args(model);
+        extra.extend_from_slice(cli);
+
+        build_model_args(config, model, self.mono_focus_on(model), &extra)
+    }
+}
+
+/// argv for launching a *single* model directly: `llama-server <flags>`,
+/// precedence `[server] -> [*] -> [model] -> mono-focus -> CLI`.
+///
+/// The profile sits **after the preset's own keys and before the override
+/// slot**, which is the whole point of it: it is switched on to force a
+/// preset into single-client behaviour, so it has to beat what the preset
+/// says — while still losing to a Settings-screen override, so any one of
+/// its keys can be taken back without editing the file.
 pub fn build_model_args(
     config: &LlamaConfig,
     model: &str,
+    mono_focus: bool,
     extra: &[String],
 ) -> Result<Vec<String>, String> {
     let section = config
@@ -443,6 +512,9 @@ pub fn build_model_args(
     options.apply_section(&config.server);
     options.apply_section(&config.defaults);
     options.apply_section(section);
+    if mono_focus {
+        options.apply_section(&config.mono_focus);
+    }
     apply_cli_overrides(&mut options, extra);
 
     Ok(options.into_args())
@@ -665,7 +737,7 @@ no-mmproj = true
     #[test]
     fn build_model_args_applies_precedence_and_booleans() {
         let config = sample();
-        let args = build_model_args(&config, "gemma4-12b", &[]).unwrap();
+        let args = build_model_args(&config, "gemma4-12b", false, &[]).unwrap();
 
         // server + defaults + model flags all present
         assert!(args.contains(&"--host".to_string()));
@@ -685,14 +757,14 @@ no-mmproj = true
     #[test]
     fn build_model_args_unknown_model_errors() {
         let config = sample();
-        assert!(build_model_args(&config, "does-not-exist", &[]).is_err());
+        assert!(build_model_args(&config, "does-not-exist", false, &[]).is_err());
     }
 
     #[test]
     fn cli_overrides_take_precedence() {
         let config = sample();
         let extra = vec!["--port".to_string(), "9999".to_string()];
-        let args = build_model_args(&config, "gemma4-12b", &extra).unwrap();
+        let args = build_model_args(&config, "gemma4-12b", false, &extra).unwrap();
         let idx = args.iter().position(|a| a == "--port").unwrap();
         assert_eq!(args.get(idx + 1).map(String::as_str), Some("9999"));
     }
@@ -779,7 +851,7 @@ no-mmproj = true
             let config = shipped_tier(tier);
 
             for name in config.model_names() {
-                let argv = build_model_args(&config, name, &[])
+                let argv = build_model_args(&config, name, false, &[])
                     .unwrap_or_else(|error| panic!("{tier}/{name}: {error}"));
 
                 assert!(
@@ -802,6 +874,153 @@ no-mmproj = true
     #[test]
     fn shipped_tiers_share_a_port() {
         assert_eq!(shipped_tier("16gb").port(), shipped_tier("32gb").port());
+    }
+
+    const WITH_PROFILE: &str = r#"
+[server]
+host = 0.0.0.0
+port = 1234
+
+[*]
+ctx-size = 32768
+parallel = 4
+
+[mono-focus]
+cache-type-k = q8_0
+cache-type-v = q8_0
+parallel = 1
+cache-reuse = 256
+keep = -1
+
+[gemma4-12b]
+hf-repo = unsloth/gemma-4-12B-it-qat-GGUF:UD-Q4_K_XL
+parallel = 2
+"#;
+
+    /// The reserved section is not a preset. Left in `models` it would be
+    /// offered on the Models screen, counted in the tier, and launchable —
+    /// a preset with no `hf-repo`, which cannot run.
+    #[test]
+    fn the_profile_section_is_never_a_preset() {
+        let config = parse(WITH_PROFILE, Path::new("test.ini"));
+
+        assert_eq!(config.model_names(), vec!["gemma4-12b"]);
+        assert!(config.model(MONO_FOCUS).is_none());
+        assert_eq!(config.mono_focus.get("cache-reuse"), Some("256"));
+    }
+
+    /// Off by default, and off means absent from the argv — not a flag
+    /// with a different value.
+    #[test]
+    fn the_profile_changes_nothing_until_it_is_switched_on() {
+        let config = parse(WITH_PROFILE, Path::new("test.ini"));
+        let args = build_model_args(&config, "gemma4-12b", false, &[]).expect("argv");
+
+        assert!(!args.iter().any(|a| a == "--cache-reuse"), "{args:?}");
+        assert!(!args.iter().any(|a| a == "--cache-type-k"), "{args:?}");
+        // The preset's own value stands.
+        assert_eq!(value_after(&args, "--parallel"), Some("2"));
+    }
+
+    /// Switched on it **beats the preset**, which is the point: it is
+    /// turned on to force single-client behaviour onto a model whose own
+    /// section says otherwise.
+    #[test]
+    fn the_profile_overrides_the_presets_own_keys() {
+        let config = parse(WITH_PROFILE, Path::new("test.ini"));
+        let args = build_model_args(&config, "gemma4-12b", true, &[]).expect("argv");
+
+        assert_eq!(value_after(&args, "--parallel"), Some("1"));
+        assert_eq!(value_after(&args, "--cache-type-k"), Some("q8_0"));
+        assert_eq!(value_after(&args, "--keep"), Some("-1"));
+        // ...and leaves everything it does not mention alone.
+        assert_eq!(value_after(&args, "--ctx-size"), Some("32768"));
+    }
+
+    /// ...while still losing to an override, so any one of its keys can be
+    /// taken back from the Settings screen without editing the file.
+    #[test]
+    fn an_override_still_beats_the_profile() {
+        let config = parse(WITH_PROFILE, Path::new("test.ini"));
+        let mut settings = LaunchSettings {
+            mono_focus: ["gemma4-12b".to_string()].into(),
+            ..LaunchSettings::default()
+        };
+        settings.overrides.set(
+            super::super::overrides::Scope::Model,
+            "gemma4-12b",
+            "parallel",
+            "3",
+        );
+
+        let args = settings.argv(&config, "gemma4-12b", &[]).expect("argv");
+        assert_eq!(value_after(&args, "--parallel"), Some("3"));
+        // The rest of the profile is untouched by that one override.
+        assert_eq!(value_after(&args, "--cache-reuse"), Some("256"));
+    }
+
+    /// The bug this plumbing exists to close: `argv_preview` applied the
+    /// session overrides and `Executor::spawn_launch` did not, so the
+    /// Models screen drew a `--ctx-size` the spawned process never saw.
+    /// Both call `LaunchSettings::argv` now, and this pins that the
+    /// overrides survive it.
+    #[test]
+    fn the_launch_argv_carries_the_session_overrides() {
+        let config = parse(WITH_PROFILE, Path::new("test.ini"));
+        let mut settings = LaunchSettings::default();
+        settings.overrides.set(
+            super::super::overrides::Scope::Model,
+            "gemma4-12b",
+            "ctx-size",
+            "65536",
+        );
+
+        let args = settings.argv(&config, "gemma4-12b", &[]).expect("argv");
+        assert_eq!(value_after(&args, "--ctx-size"), Some("65536"));
+    }
+
+    /// An explicit `:launch model -- --flag` still wins over everything
+    /// remembered: it is an instruction, not a preference.
+    #[test]
+    fn a_typed_flag_beats_the_overrides_and_the_profile() {
+        let config = parse(WITH_PROFILE, Path::new("test.ini"));
+        let settings = LaunchSettings {
+            mono_focus: ["gemma4-12b".to_string()].into(),
+            ..LaunchSettings::default()
+        };
+
+        let cli = vec!["--parallel".to_string(), "8".to_string()];
+        let args = settings.argv(&config, "gemma4-12b", &cli).expect("argv");
+
+        assert_eq!(value_after(&args, "--parallel"), Some("8"));
+    }
+
+    /// The value argv carries after a flag, or `None` when the flag is
+    /// absent — the assertions above are about precedence, not position.
+    fn value_after<'a>(args: &'a [String], flag: &str) -> Option<&'a str> {
+        let at = args.iter().position(|a| a == flag)?;
+        args.get(at + 1).map(String::as_str)
+    }
+
+    /// The shipped tiers carry the profile now, and it must not have
+    /// turned into a fourteenth preset — which is exactly what the two
+    /// `shipped_*_tier_parses_with_every_preset` tests would catch, and
+    /// this states outright.
+    #[test]
+    fn the_shipped_tiers_carry_the_profile_without_gaining_a_preset() {
+        for tier in ["16gb", "32gb"] {
+            let config = shipped_tier(tier);
+
+            assert_eq!(config.mono_focus.get("parallel"), Some("1"), "{tier}");
+            assert_eq!(config.mono_focus.get("cache-reuse"), Some("256"), "{tier}");
+            // A boolean flag, not a count: `slots = 1` would emit
+            // `--slots 1` and leave a stray argument behind.
+            assert_eq!(config.mono_focus.get("slots"), Some("true"), "{tier}");
+            assert!(
+                !config.model_names().contains(&MONO_FOCUS),
+                "{tier} offers the profile as a preset"
+            );
+        }
     }
 
     #[test]
@@ -835,7 +1054,7 @@ reasoning = off
         assert_eq!(config.model_names(), vec!["gemma4-12b", "qwen3-coder"]);
         assert_eq!(config.port(), 1234);
 
-        let args = build_model_args(&config, "gemma4-12b", &[]).unwrap();
+        let args = build_model_args(&config, "gemma4-12b", false, &[]).unwrap();
         assert_eq!(
             args,
             vec![

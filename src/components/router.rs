@@ -25,7 +25,7 @@ pub fn render(frame: &mut Frame, app: &App, area: Rect) {
         .split(area);
 
     settings(frame, app, chunks[0]);
-    frame.render_widget(preview(app), chunks[1]);
+    preview(frame, app, chunks[1]);
 }
 
 fn settings(frame: &mut Frame, app: &App, area: Rect) {
@@ -157,18 +157,14 @@ fn field(label: &str, value: String) -> Line<'static> {
 
 /// The same live argv the Models screen shows, for the same reason: the
 /// numbers above are only meaningful as the flags they become.
-fn preview(app: &App) -> Paragraph<'static> {
-    let text = match app.llama.router_argv_preview() {
-        Ok(argv) => super::models::wrap_argv(&argv),
-        Err(error) => error,
-    };
-
-    let mut block = block(" argv preview ".to_string());
-    if let Some(hint) = keys::hint_for(Screen::Router, "y") {
-        block = block.title_top(Line::styled(format!(" {hint} "), Theme::border()).right_aligned());
-    }
-
-    Paragraph::new(text).style(Theme::logs()).block(block)
+fn preview(frame: &mut Frame, app: &App, area: Rect) {
+    components::argv_preview(
+        frame,
+        area,
+        Screen::Router,
+        app.llama.router_argv_preview(),
+        app.llama.preview_scroll,
+    );
 }
 
 fn block(title: String) -> Block<'static> {

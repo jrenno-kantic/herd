@@ -480,6 +480,10 @@ pub struct LauncherState {
     /// `gemma4-12b` in the 16gb tier and in the 32gb one are the same
     /// model — see `prefs.rs`.
     pub favorites: BTreeSet<String>,
+    /// Presets with the `[mono-focus]` profile switched on, by name.
+    /// Persisted alongside the favourites and for the same reason: it is
+    /// something the user chose, not where the program was.
+    pub mono_focus: BTreeSet<String>,
     /// What the Router screen would start llama-server's built-in router
     /// with. Persisted, since they are settings, not session state.
     pub router: RouterPrefs,
@@ -519,6 +523,10 @@ pub struct LauncherState {
     /// overrides.
     pub reserved_ratio: f64,
     pub picker_cursor: usize,
+    /// Lines of the argv preview hidden *above* its viewport. Zero is the
+    /// top, which is the resting position — unlike the Logs screen, where
+    /// the interesting end is the bottom.
+    pub preview_scroll: usize,
 }
 
 impl LauncherState {
@@ -533,6 +541,7 @@ impl LauncherState {
             filter: String::new(),
             overrides: prefs.overrides,
             favorites: prefs.favorites,
+            mono_focus: prefs.mono_focus,
             router: prefs.router,
             router_cursor: 0,
             settings_cursor: 0,
@@ -552,6 +561,7 @@ impl LauncherState {
             stats: SessionStats::default(),
             reserved_ratio: memory::DEFAULT_RESERVED_RATIO,
             picker_cursor: 0,
+            preview_scroll: 0,
         };
         state.reload();
         state.restore_cursor();
@@ -746,7 +756,21 @@ impl LauncherState {
             .selected_model()
             .ok_or_else(|| "no model selected".to_string())?;
 
-        llama::ini::build_model_args(config, &model, &self.overrides.to_args(&model))
+        self.launch_settings().argv(config, &model, &[])
+    }
+
+    /// Everything a launch needs from this screen's state: the overrides,
+    /// and which presets have mono-focus on.
+    ///
+    /// Handed to the `Executor` before each command so the process it
+    /// spawns is the one the preview drew. They used to be assembled
+    /// separately and had diverged: the preview applied the overrides and
+    /// the launch did not.
+    pub fn launch_settings(&self) -> llama::ini::LaunchSettings {
+        llama::ini::LaunchSettings {
+            overrides: self.overrides.clone(),
+            mono_focus: self.mono_focus.clone(),
+        }
     }
 
     /// The same launch, as one line a shell will run.
@@ -819,7 +843,69 @@ impl LauncherState {
             }
         }
 
+        // The profile last, because it is the last thing applied — the
+        // section reads in the order the flags actually take effect.
+        //
+        // Its keys are listed **only when it is on**. Showing them while
+        // it is off would put rows on screen that look like every other
+        // editable setting and are not in force, and editing one would
+        // quietly create a model override that *is* — which is the
+        // confusion this ordering avoids rather than explains.
+        rows.push(SettingRow::Header(self.mono_focus_header()));
+        if self.mono_focus_on(&model) {
+            for (key, value) in config.mono_focus.iter() {
+                rows.push(self.entry(Scope::Model, &model, key, value));
+            }
+        }
+
         rows
+    }
+
+    /// The `[mono-focus]` heading, which carries the state because there
+    /// is nowhere else to put it: an empty section and a switched-off one
+    /// look identical otherwise.
+    fn mono_focus_header(&self) -> String {
+        let Some(config) = self.config.as_ref() else {
+            return format!("[{}]", llama::ini::MONO_FOCUS);
+        };
+        let name = llama::ini::MONO_FOCUS;
+
+        if config.mono_focus.iter().next().is_none() {
+            return format!("[{name}]  not in this models.ini");
+        }
+
+        match self.selected_model() {
+            Some(model) if self.mono_focus_on(&model) => format!("[{name}]  ON  ·  m to disable"),
+            _ => format!("[{name}]  off  ·  m to enable"),
+        }
+    }
+
+    pub fn mono_focus_on(&self, model: &str) -> bool {
+        self.mono_focus.contains(model)
+    }
+
+    /// Switches the profile for the highlighted preset. Returns what it
+    /// did, or `None` when there is nothing to switch — an ini with no
+    /// `[mono-focus]` section has no profile to apply, and pretending
+    /// otherwise would set a flag that changes nothing.
+    fn toggle_mono_focus(&mut self) -> Option<(String, bool)> {
+        let model = self.selected_model()?;
+
+        if self
+            .config
+            .as_ref()
+            .is_none_or(|config| config.mono_focus.iter().next().is_none())
+        {
+            return None;
+        }
+
+        let on = if self.mono_focus.remove(&model) {
+            false
+        } else {
+            self.mono_focus.insert(model.clone());
+            true
+        };
+        Some((model, on))
     }
 
     fn entry(&self, scope: Scope, model: &str, key: &str, ini_value: &str) -> SettingRow {
@@ -1204,6 +1290,9 @@ pub struct App {
     /// keeps `update` a pure state transition — it never asks the terminal
     /// anything, it is told.
     pub rows: u16,
+    /// ...and the last width, for the one other piece of geometry `update`
+    /// has to know: how many lines of the argv preview its pane hides.
+    pub cols: u16,
     pub llama: LauncherState,
 }
 
@@ -1218,9 +1307,24 @@ fn is_on(value: &str) -> bool {
         )
 }
 
-/// Terminal height assumed before the first `Resize`. The classic 24x80,
+/// Terminal size assumed before the first `Resize`. The classic 24x80,
 /// so a page is sane even if the size never arrives.
 const DEFAULT_ROWS: u16 = 24;
+const DEFAULT_COLS: u16 = 80;
+
+/// The argv preview's pane, hand-counted from the layout the same way
+/// `chrome` is, and pinned against a real render by
+/// `the_preview_never_scrolls_past_what_the_pane_hides`.
+///
+/// `App::update` has to know it because scrolling is clamped there — the
+/// alternative is a counter that keeps climbing while the view stands
+/// still, so that pressing the other key does nothing for twenty presses.
+mod preview_pane {
+    /// Sidebar (24) and the pane's own borders (2).
+    pub const CHROME_COLS: u16 = 26;
+    /// `Constraint::Length(8)` less the top and bottom borders.
+    pub const ROWS: usize = 6;
+}
 
 /// Rows a screen spends on things that are not list entries: the command
 /// bar and status line, the block borders, and whatever the screen puts
@@ -1282,6 +1386,7 @@ impl App {
             log_scroll: 0,
             running: false,
             rows: DEFAULT_ROWS,
+            cols: DEFAULT_COLS,
             llama: LauncherState::new(config_path, last_launched, prefs),
         }
     }
@@ -1295,6 +1400,7 @@ impl App {
     pub fn prefs(&self) -> Prefs {
         Prefs {
             favorites: self.llama.favorites.clone(),
+            mono_focus: self.llama.mono_focus.clone(),
             overrides: self.llama.overrides.clone(),
             router: self.llama.router.clone(),
         }
@@ -1316,6 +1422,52 @@ impl App {
             .saturating_sub(chrome(self.screen))
             .saturating_sub(OVERLAP)
             .max(MIN_PAGE) as usize
+    }
+
+    /// The argv the preview is showing on the current screen, wrapped to
+    /// the pane it will be drawn in. `None` on a screen that has no
+    /// preview, which is what makes the scroll keys inert there.
+    fn preview_lines(&self) -> Option<usize> {
+        let argv = match self.screen {
+            Screen::Models => self.llama.argv_preview().ok()?,
+            Screen::Router => self.llama.router_argv_preview().ok()?,
+            _ => return None,
+        };
+
+        let width = self.cols.saturating_sub(preview_pane::CHROME_COLS) as usize;
+        Some(crate::components::wrap_argv(&argv, width).len())
+    }
+
+    /// How far the preview can be scrolled before the last line is on
+    /// screen. Zero when it all fits, which is what stops the keys from
+    /// advertising motion that never happens.
+    pub fn preview_max_scroll(&self) -> usize {
+        self.preview_lines()
+            .unwrap_or(0)
+            .saturating_sub(preview_pane::ROWS)
+    }
+
+    fn clamp_preview_scroll(&mut self) {
+        self.llama.preview_scroll = self.llama.preview_scroll.min(self.preview_max_scroll());
+    }
+
+    /// Scrolls the argv preview, one line at a time.
+    ///
+    /// A long argv — a preset with the `[mono-focus]` profile on, say —
+    /// wraps past the six rows the pane has, and until now the rest was
+    /// simply cut off with nothing to say it existed. Clamped here rather
+    /// than at draw time, so `render` stays a pure function of `App` and
+    /// the counter cannot climb past what is actually hidden.
+    fn scroll_preview(&mut self, down: bool) -> Action {
+        let max = self.preview_max_scroll();
+        let scroll = &mut self.llama.preview_scroll;
+
+        *scroll = if down {
+            (*scroll + 1).min(max)
+        } else {
+            scroll.saturating_sub(1)
+        };
+        Action::None
     }
 
     pub fn push_log(&mut self, entry: impl AsRef<str>) {
@@ -1395,8 +1547,13 @@ impl App {
                 }
                 Action::None
             }
-            UiEvent::Resize { height, .. } => {
+            UiEvent::Resize { width, height } => {
                 self.rows = height;
+                self.cols = width;
+                // A narrower terminal wraps the argv into more lines and a
+                // wider one into fewer, so a scroll offset taken at the
+                // old size can now point past the end.
+                self.clamp_preview_scroll();
                 Action::None
             }
             UiEvent::Quit => Action::Quit,
@@ -1568,10 +1725,15 @@ impl App {
             // The Settings screen shows the selected preset's keys, so its
             // cursor has to stay in range when the selection moves.
             self.llama.clamp_settings_cursor();
+            // A new row means a new argv: staying scrolled into the middle
+            // of the previous one would be reading the wrong command.
+            self.llama.preview_scroll = 0;
             return Action::None;
         }
 
         match key.code {
+            KeyCode::Char('J') => self.scroll_preview(true),
+            KeyCode::Char('K') => self.scroll_preview(false),
             KeyCode::Char('/') => {
                 self.mode = Mode::Filter;
                 Action::None
@@ -1778,6 +1940,8 @@ impl App {
         }
 
         match key.code {
+            KeyCode::Char('J') => self.scroll_preview(true),
+            KeyCode::Char('K') => self.scroll_preview(false),
             KeyCode::Char('+') | KeyCode::Char('=') => {
                 self.llama.adjust_router(true);
                 Action::None
@@ -2071,6 +2235,10 @@ impl App {
 
         match key.code {
             KeyCode::Enter => self.edit_or_toggle_setting(),
+            // The profile is switched from here rather than from a row:
+            // "is this on" is not a `key = value` in the file, and giving
+            // it a fake row would make it look like one.
+            KeyCode::Char('m') => self.switch_mono_focus(),
             KeyCode::Char('x') => {
                 if let Some(row) = self.llama.selected_setting() {
                     if let Some((scope, model, key, _, _)) = row.as_entry() {
@@ -2089,6 +2257,39 @@ impl App {
             }
             _ => Action::None,
         }
+    }
+
+    /// `m` on the Settings screen: switch the `[mono-focus]` profile for
+    /// the highlighted preset, and say what that means rather than only
+    /// that it happened — the flags are the point of it.
+    fn switch_mono_focus(&mut self) -> Action {
+        match self.llama.toggle_mono_focus() {
+            Some((model, true)) => {
+                let flags = self
+                    .llama
+                    .config
+                    .as_ref()
+                    .map(|config| {
+                        config
+                            .mono_focus
+                            .iter()
+                            .map(|(key, value)| format!("{key}={value}"))
+                            .collect::<Vec<_>>()
+                            .join(" ")
+                    })
+                    .unwrap_or_default();
+                self.push_log(format!("mono-focus on for {model}: {flags}"));
+            }
+            Some((model, false)) => self.push_log(format!("mono-focus off for {model}")),
+            None => self.push_log(format!(
+                "no [{}] section in {} — nothing to switch on",
+                llama::ini::MONO_FOCUS,
+                self.llama.config_path.display()
+            )),
+        }
+        // The cursor counts entries, and switching it on adds some.
+        self.llama.clamp_settings_cursor();
+        Action::None
     }
 
     /// Enter on a setting: flip it if it is a boolean, otherwise open the
@@ -2706,7 +2907,10 @@ alias = qwen3-coder
         let mut app = App::with_config_path(shipped("16gb"));
         // A short terminal, so the page is smaller than the fixture and
         // the assertions below can tell paging apart from End.
-        app.update(UiEvent::Resize { height: 22 });
+        app.update(UiEvent::Resize {
+            width: 120,
+            height: 22,
+        });
         let page = app.page();
         let last = app.llama.rows().len() - 1;
         assert!(last > page, "fixture needs more presets than a page");
@@ -2734,10 +2938,16 @@ alias = qwen3-coder
     fn a_page_follows_the_terminal_height() {
         let mut app = app_with_sample();
 
-        app.update(UiEvent::Resize { height: 24 });
+        app.update(UiEvent::Resize {
+            width: 120,
+            height: 24,
+        });
         let short = app.page();
 
-        app.update(UiEvent::Resize { height: 60 });
+        app.update(UiEvent::Resize {
+            width: 120,
+            height: 60,
+        });
         let tall = app.page();
 
         assert!(
@@ -2751,7 +2961,10 @@ alias = qwen3-coder
     #[test]
     fn a_tiny_terminal_still_pages_by_something() {
         let mut app = app_with_sample();
-        app.update(UiEvent::Resize { height: 1 });
+        app.update(UiEvent::Resize {
+            width: 120,
+            height: 1,
+        });
 
         assert!(app.page() >= 3, "page collapsed to {}", app.page());
     }
@@ -3077,6 +3290,86 @@ alias = qwen3-coder
     /// it: the same argv, the session overrides included, as one runnable
     /// line. The clipboard itself is the Executor's business — `update`
     /// stays pure and only hands over the text.
+    /// The preview pane holds six lines; a long argv does not. Scrolling
+    /// is bounded at both ends, and the bound is the number of lines the
+    /// pane actually hides.
+    #[test]
+    fn the_argv_preview_scrolls_within_its_bounds() {
+        let mut app = app_with_sample();
+        app.update(UiEvent::Resize {
+            width: 60,
+            height: 40,
+        });
+
+        let max = app.preview_max_scroll();
+        assert!(max > 0, "the fixture argv should not fit in six rows at 60");
+
+        // Held down, it stops at the last line rather than counting on.
+        for _ in 0..50 {
+            app.update(ch('J'));
+        }
+        assert_eq!(app.llama.preview_scroll, max);
+
+        // ...so one press of the other key moves immediately.
+        app.update(ch('K'));
+        assert_eq!(app.llama.preview_scroll, max - 1);
+
+        for _ in 0..50 {
+            app.update(ch('K'));
+        }
+        assert_eq!(app.llama.preview_scroll, 0);
+    }
+
+    /// A wider terminal wraps the same argv into fewer lines, so an offset
+    /// taken while narrow can point past the end. Resize re-clamps it.
+    #[test]
+    fn widening_the_terminal_pulls_the_preview_back_into_range() {
+        let mut app = app_with_sample();
+        app.update(UiEvent::Resize {
+            width: 50,
+            height: 40,
+        });
+        for _ in 0..50 {
+            app.update(ch('J'));
+        }
+        assert!(app.llama.preview_scroll > 0);
+
+        app.update(UiEvent::Resize {
+            width: 200,
+            height: 40,
+        });
+        assert_eq!(app.preview_max_scroll(), 0, "it all fits at 200 columns");
+        assert_eq!(app.llama.preview_scroll, 0, "left scrolled past the end");
+    }
+
+    /// Moving to another preset shows another command. Staying scrolled
+    /// into the middle of it would be reading the wrong argv.
+    #[test]
+    fn selecting_another_preset_returns_the_preview_to_the_top() {
+        let mut app = app_with_sample();
+        app.update(UiEvent::Resize {
+            width: 50,
+            height: 40,
+        });
+        app.update(ch('J'));
+        assert!(app.llama.preview_scroll > 0);
+
+        app.update(key(KeyCode::Down));
+        assert_eq!(app.llama.preview_scroll, 0);
+    }
+
+    /// A screen with no preview must not accumulate a scroll offset that
+    /// would silently apply when the user comes back to one.
+    #[test]
+    fn a_screen_without_a_preview_has_nothing_to_scroll() {
+        let mut app = app_with_sample();
+        jump(&mut app, Screen::Logs);
+
+        assert_eq!(app.preview_max_scroll(), 0);
+        app.update(ch('J'));
+        assert_eq!(app.llama.preview_scroll, 0);
+    }
+
     #[test]
     fn y_copies_the_launch_command_for_the_highlighted_preset() {
         let mut app = app_with_sample();
@@ -3126,8 +3419,121 @@ alias = qwen3-coder
             })
             .collect();
 
-        assert_eq!(headers, vec!["[server]", "[*]  defaults", "[gemma4-12b]"]);
+        assert_eq!(
+            headers,
+            vec![
+                "[server]",
+                "[*]  defaults",
+                "[gemma4-12b]",
+                // Last, because it is the last thing applied — and the
+                // heading carries the state, since a section that is
+                // absent and one that is switched off look identical.
+                "[mono-focus]  not in this models.ini",
+            ]
+        );
         assert!(app.llama.setting_entry_indices().len() >= 7);
+    }
+
+    /// The ini with a `[mono-focus]` section, which the two-preset sample
+    /// does not carry.
+    const PROFILE_INI: &str = r#"
+[server]
+host = 0.0.0.0
+port = 1234
+
+[*]
+ctx-size = 32768
+
+[mono-focus]
+cache-type-k = q8_0
+cache-type-v = q8_0
+parallel = 1
+cache-reuse = 256
+keep = -1
+
+[gemma4-12b]
+hf-repo = unsloth/gemma-4-12B-it-qat-GGUF:UD-Q4_K_XL
+"#;
+
+    fn app_with_profile() -> App {
+        let path = std::env::temp_dir().join(format!(
+            "herd-profile-{}-{:?}.ini",
+            std::process::id(),
+            std::thread::current().id()
+        ));
+        std::fs::write(&path, PROFILE_INI).expect("write ini");
+        App::with_config_path(path)
+    }
+
+    /// `m` switches the profile, and the argv preview shows the change —
+    /// which is the whole test, since the preview and the launch are the
+    /// same call.
+    #[test]
+    fn m_switches_mono_focus_and_the_argv_follows() {
+        let mut app = app_with_profile();
+        jump(&mut app, Screen::Settings);
+
+        assert!(!app.llama.mono_focus_on("gemma4-12b"));
+        let before = app.llama.argv_preview().expect("argv");
+        assert!(!before.iter().any(|a| a == "--cache-reuse"), "{before:?}");
+
+        app.update(ch('m'));
+
+        assert!(app.llama.mono_focus_on("gemma4-12b"));
+        let after = app.llama.argv_preview().expect("argv");
+        assert!(after.iter().any(|a| a == "--cache-reuse"), "{after:?}");
+        assert!(after.iter().any(|a| a == "--keep"), "{after:?}");
+
+        // ...and off again.
+        app.update(ch('m'));
+        assert!(!app.llama.mono_focus_on("gemma4-12b"));
+    }
+
+    /// Its keys are listed only while it is on. Rows on screen that look
+    /// editable and are not in force are worse than no rows.
+    #[test]
+    fn the_profile_keys_appear_only_while_it_is_on() {
+        let mut app = app_with_profile();
+        let keys = |app: &App| {
+            app.llama
+                .setting_rows()
+                .iter()
+                .filter_map(|row| row.as_entry().map(|(_, _, key, _, _)| key.to_string()))
+                .filter(|key| key == "cache-reuse")
+                .count()
+        };
+
+        assert_eq!(keys(&app), 0);
+        jump(&mut app, Screen::Settings);
+        app.update(ch('m'));
+        assert_eq!(keys(&app), 1);
+    }
+
+    /// An ini with no such section has no profile to switch on, and says
+    /// so rather than setting a flag that changes nothing.
+    #[test]
+    fn switching_a_profile_that_is_not_in_the_file_says_so() {
+        let mut app = app_with_sample();
+        jump(&mut app, Screen::Settings);
+
+        app.update(ch('m'));
+
+        assert!(!app.llama.mono_focus_on("gemma4-12b"));
+        assert!(app
+            .logs
+            .back()
+            .is_some_and(|line| line.contains("nothing to switch on")));
+    }
+
+    /// The toggle is a choice, so it is remembered — with the favourites
+    /// and the overrides, not with the session file.
+    #[test]
+    fn mono_focus_is_carried_into_the_saved_preferences() {
+        let mut app = app_with_profile();
+        jump(&mut app, Screen::Settings);
+        app.update(ch('m'));
+
+        assert!(app.prefs().mono_focus.contains("gemma4-12b"));
     }
 
     #[test]

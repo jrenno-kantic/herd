@@ -10,7 +10,8 @@
   the newest line" and no separate follow flag is needed
 - `running: bool` - a command is in flight; input is ignored while true, except
   for `stop`, which is the one command needed when something else is wedged
-- `rows: u16` - last terminal height, from `UiEvent::Resize`; drives `page()`
+- `rows: u16`, `cols: u16` - last terminal size, from `UiEvent::Resize`; drive
+  `page()` and the argv preview's scroll bound
 - `llama: LauncherState`
 
 ## LauncherState
@@ -34,6 +35,9 @@
 - `last_launched: Option<String>`
 - `prompt: String`, `chat: Option<Result<ChatOutcome, String>>`, `chat_pending: bool`
 - `stats: SessionStats`, `reserved_ratio: f64`, `picker_cursor: usize`
+- `preview_scroll: usize` - lines of the argv preview hidden above its
+  viewport; 0 is the top, and it is clamped in `App::update` against the
+  pane's size so it can never climb past what is actually hidden
 - `chat_started: Option<Instant>` - so the Test screen can count up while waiting
 
 ## Confirm
@@ -157,7 +161,27 @@ preset name and an unreadable RAM figure, and is never rendered as a warning.
 
 ## LlamaConfig (parsed models.ini)
 
-- `path`, `server: Section`, `defaults: Section`, `models: Vec<(String, Section)>`
+- `path`, `server: Section`, `defaults: Section`, `mono_focus: Section`,
+  `models: Vec<(String, Section)>`
+
+`mono-focus` is a **reserved section name**, like `server` and `*` — that is how
+the profile is "handled". Every other section is a preset, so without reserving
+it the profile would appear on the Models screen as a launchable model with no
+`hf-repo`. `ini::is_reserved` is the single list.
+
+## LaunchSettings
+
+What a launch needs that the ini does not carry: the session `overrides`, and
+`mono_focus` — the presets the profile is switched on for, by name.
+
+`LaunchSettings::argv` is the **only** place a launch's argv is assembled. It
+exists because the preview and the launch had diverged: `argv_preview` applied
+the overrides and the Executor did not, so the Models screen drew flags the
+spawned process never saw. Precedence:
+
+```
+[server] -> [*] -> [model] -> mono-focus -> overrides -> CLI
+```
 
 A `Section` is an ordered `key = value` list: re-setting a key replaces its value
 but keeps its original position.
@@ -175,6 +199,9 @@ step without the engine gaining a rule:
 Persisted in `~/.herd_config`. The "never written to disk" rule was always
 about the *ini*, which is hand-maintained and commented and is still never
 touched; the overrides live in a file herd owns outright.
+
+An override **beats the `[mono-focus]` profile**, so any single key the profile
+forces can be taken back from the Settings screen without editing the file.
 
 ## Session (persisted)
 
@@ -212,7 +239,7 @@ and to build a launchable argv.
 `LlamaStatus(LlamaSnapshot)` | `PortInUse { port, model }` |
 `ChatResult(Box<Result<ChatOutcome, String>>)` | `CacheList(Vec<CachedModel>)` |
 `DownloadProgress { model, done, total }` |
-`DownloadFinished { model, result }` | `Resize { height }` | `Quit`
+`DownloadFinished { model, result }` | `Resize { width, height }` | `Quit`
 
 ## Action
 

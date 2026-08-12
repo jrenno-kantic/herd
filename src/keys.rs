@@ -148,6 +148,16 @@ const MODELS: &[Binding] = &[
         short: "copy",
         brief: false,
     },
+    // Not in the footer: the preview's own border carries it, and only
+    // when there is something below the fold — a key advertised where it
+    // would do nothing is worse than one nobody mentioned.
+    Binding {
+        keys: &["J", "K"],
+        label: "J/K",
+        action: "scroll the argv preview",
+        short: "scroll",
+        brief: false,
+    },
     full(&["r"], "r", "re-read models.ini from disk"),
 ];
 
@@ -212,6 +222,16 @@ const ROUTER: &[Binding] = &[
         short: "copy",
         brief: false,
     },
+    // Not in the footer: the preview's own border carries it, and only
+    // when there is something below the fold — a key advertised where it
+    // would do nothing is worse than one nobody mentioned.
+    Binding {
+        keys: &["J", "K"],
+        label: "J/K",
+        action: "scroll the argv preview",
+        short: "scroll",
+        brief: false,
+    },
 ];
 
 const TEST: &[Binding] = &[
@@ -236,6 +256,12 @@ const SETTINGS: &[Binding] = &[
         "enter",
         "edit/toggle",
         "edit the highlighted setting — or flip it, when it is true/false or on/off",
+    ),
+    brief(
+        &["m"],
+        "m",
+        "mono-focus",
+        "switch the [mono-focus] profile on or off for this preset",
     ),
     brief(&["x"], "x", "clear", "clear this override"),
     brief(&["X"], "X", "clear all", "clear every override"),

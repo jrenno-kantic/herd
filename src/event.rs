@@ -50,13 +50,17 @@ pub enum UiEvent {
         result: Box<Result<String, String>>,
     },
     /// The terminal was resized. Carried into `App` so the page keys can
-    /// move by a real screenful; `App::update` stays pure, it simply
-    /// remembers the last height it was told about.
+    /// move by a real screenful, and so the argv preview knows how many
+    /// lines its pane hides; `App::update` stays pure, it simply remembers
+    /// the last size it was told about.
     ///
-    /// Height only: every component is handed its own `Rect` at draw time
-    /// and so already knows its true width, but `App::update` runs nowhere
-    /// near a frame and has no other way to learn how tall the screen is.
+    /// Every component is handed its own `Rect` at draw time and so knows
+    /// its true size already. `App::update` runs nowhere near a frame and
+    /// has no other way to find out — which is why the two places that
+    /// need geometry (`chrome`, `preview_pane`) hand-count it from these
+    /// numbers, and why both are pinned against a real render.
     Resize {
+        width: u16,
         height: u16,
     },
     Quit,
@@ -86,8 +90,8 @@ impl EventStream {
                                 break;
                             }
                         }
-                        Ok(Event::Resize(_, height)) => {
-                            if tx.send(UiEvent::Resize { height }).is_err() {
+                        Ok(Event::Resize(width, height)) => {
+                            if tx.send(UiEvent::Resize { width, height }).is_err() {
                                 break;
                             }
                         }

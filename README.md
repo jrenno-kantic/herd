@@ -23,7 +23,7 @@ the cache is holding; menu order follows how often a screen is wanted, not how
 closely it relates to its neighbour.
 
 ```
-┌HERD 0.7.5────────────┐┌ Models · 32gb · ~/models/32gb/models.ini ────────────────────── 1/8 ┐
+┌HERD 0.7.7────────────┐┌ Models · 32gb · ~/models/32gb/models.ini ────────────────────── 1/8 ┐
 │ ▸ 1 Models           ││   NAME            REPO              RAM     OPT CAPS SPEC   LOCAL   │
 │   2 Server           ││▸★●gemma4-12b      unsloth/gemma-4…  7.3G  qat ud    S  mtp         █│
 │   3 Router           ││  ★gemma4-31b      unsloth/gemma-4…~18.3G  qat ud    S  mtp not local│
@@ -32,7 +32,7 @@ closely it relates to its neighbour.
 │   6 Settings         ││  RAM 36 GiB · quantisation-aware training · speculative (mtp)       │
 │   7 Logs             ││  j/↓ move · enter launch · s stop · d download · / filter · …       │
 │   8 Hub              │└─────────────────────────────────────────────────────────────────────┘
-│ tier  32gb           │┌ argv preview ─────────────────────────────────────────────── y copy ┐
+│ tier  32gb           │┌ argv preview ───────────────────────────────── J/K scroll · y copy ┐
 │ RAM   36 GiB         ││llama-server \                                                       │
 │                      ││  --host 0.0.0.0 --port 1234 --jinja --ctx-size 32768 \              │
 │                      ││  --gpu-layers 99 --hf-repo unsloth/gemma-4-12B-it-qat-GGUF…         │
@@ -61,6 +61,14 @@ were. `?` always has all of them.
 you navigate by position must not rearrange itself because you starred something
 above. Stars are kept in `~/.herd_config`.
 
+**The preview wraps to its pane and scrolls.** A long command — a preset with
+`[mono-focus]` switched on, or simply a narrow terminal — is taller than the six
+rows the pane has, and used to be cut off with nothing to say so. Lines now wrap
+to the width actually available (one option per line, flag and value together,
+never split), a scrollbar appears on the right border when there is more below,
+and `J`/`K` reach it. The keys are named on the border only while there is
+something to scroll to.
+
 **`y` copies that argv as a shell command**, quoted onto one line so it can be
 pasted straight into a terminal, a script or a bug report — the same argv HERD
 would spawn, session overrides included, rather than a re-typing of the pane.
@@ -75,7 +83,7 @@ appears once the clipboard has actually taken it; if no clipboard tool answered
 cargo run
 cargo run -- --config ~/models/16gb/models.ini   # pick a specific preset file
 cargo run -- --help
-cargo run -- --version                           # herd 0.7.5 (a1b2c3d 2026-08-12)
+cargo run -- --version                           # herd 0.7.7 (a1b2c3d 2026-08-12)
 ```
 
 `--version` reports the commit the binary was built from, with `-dirty` when it
@@ -88,7 +96,7 @@ behaves on this machine:
 ```
 ┌ About ─────────────────────────────────────────────────────────┐
 │                                                                │
-│  herd 0.7.5                                                    │
+│  herd 0.7.7                                                    │
 │  Terminal control plane for llama-server                       │
 │                                                                │
 │  build   cd7ed52-dirty · 2026-08-12                            │
@@ -135,6 +143,7 @@ Models screen:
 | `d` | download it without launching |
 | `f` | star it, or take the star off |
 | `y` | copy the launch command to the clipboard, quoted and ready to paste |
+| `J` / `K` | scroll the argv preview, when the command is taller than its pane |
 | `s` | stop the running server, or clear a failed launch |
 | `/` | filter by name or repo (`Enter` keeps it, `Esc` clears it) |
 | `t` / `T` | next / previous RAM tier |
@@ -162,8 +171,9 @@ Test screen: `Enter` send, `e` edit the prompt, `r` reset it.
 Stats screen: `+` / `-` adjust the memory reservation, `r` reset it.
 
 Settings screen: `Up`/`Down` move, `Enter` edit — or **flip** it, when the value
-is `true`/`false`, `on`/`off` or `yes`/`no` — `x` clear one override, `X` clear
-all. Toggleable rows carry a `[x]`/`[ ]` checkbox, so a row that flips looks
+is `true`/`false`, `on`/`off` or `yes`/`no` — `m` switch the
+[`[mono-focus]` profile](#the-mono-focus-profile) for this preset, `x` clear one
+override, `X` clear all. Toggleable rows carry a `[x]`/`[ ]` checkbox, so a row that flips looks
 different before you press anything.
 
 Logs screen: `k`/`j` scroll, `PgUp`/`PgDn` by a page, `g` oldest, `G` back to
@@ -532,6 +542,55 @@ An override is exactly a CLI override, so it slots into the precedence chain you
 ```
 
 Overridden keys are marked `*` on the Settings screen and shown next to the value they replaced. Retyping the original value clears the override rather than pinning an identical one.
+
+## The `[mono-focus]` profile
+
+A named set of flags you switch on per preset, for the case the ini cannot
+otherwise express: **one client, looping on the same base prompt**, wanting the
+KV cache kept rather than shared out.
+
+```ini
+[mono-focus]
+cache-type-k = q8_0
+cache-type-v = q8_0
+parallel = 1
+cache-reuse = 256
+keep = -1
+slots = true
+```
+
+**How the section is handled.** `mono-focus` is a **reserved section name**,
+like `[server]` and `[*]`. That is the whole mechanism, and it matters: every
+other section in a `models.ini` is a preset, so without reserving it the profile
+would appear on the Models screen as a launchable model with no `hf-repo` — one
+that cannot run, counted in the tier and offered on `Enter`.
+
+`m` on the Settings screen switches it for the highlighted preset. It is **off
+by default**, remembered in `~/.herd_config` alongside the favourites, and keyed
+by preset name — so it is on for the model you drive in a loop and off for the
+one you chat with.
+
+It applies **after the preset's own keys and before the overrides**:
+
+```
+[server] -> [*] -> [model] -> mono-focus -> overrides -> CLI
+```
+
+That position is the point. It is switched on to force single-client behaviour
+onto a preset whose own section says otherwise, so it has to beat `[model]` —
+while still losing to a Settings-screen override, so any one of its keys can be
+taken back without editing the file.
+
+The Settings screen shows its keys **only while it is on**, and the heading
+carries the state (`[mono-focus]  ON  ·  m to disable`) — an absent section and
+a switched-off one look identical otherwise. With no such section in the file,
+`m` says so rather than setting a flag that changes nothing.
+
+One note on `slots`: `--slots` is a *boolean* in llama.cpp — it exposes the
+slots monitoring endpoint, and is on by default. The slot **count** is
+`parallel`. Written `slots = 1` HERD would emit `--slots 1` and leave a stray
+`1` on llama-server's command line, so the shipped example spells it
+`slots = true`.
 
 ## Choosing a models.ini
 

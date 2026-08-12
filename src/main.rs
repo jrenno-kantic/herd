@@ -84,8 +84,8 @@ async fn main() -> Result<()> {
     // Crossterm only reports a resize when one happens, so the starting
     // size has to be asked for. Without it the page keys would move by the
     // assumed 24-row default until the user happened to resize.
-    if let Ok((_, height)) = crossterm::terminal::size() {
-        app.update(event::UiEvent::Resize { height });
+    if let Ok((width, height)) = crossterm::terminal::size() {
+        app.update(event::UiEvent::Resize { width, height });
     }
 
     // Ask llama.cpp what it already has. Until the answer arrives every
@@ -114,6 +114,12 @@ async fn main() -> Result<()> {
                 Err(_) => break,
             }
         }
+
+        // The overrides and mono-focus toggles the UI holds, handed over
+        // before anything runs. Taken here rather than pushed on every
+        // edit: there is no Action for "a setting changed", and a snapshot
+        // at dispatch time is the state the user is looking at.
+        executor.set_launch_settings(app.llama.launch_settings());
 
         for action in actions {
             match action {

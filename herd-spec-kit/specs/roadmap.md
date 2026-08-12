@@ -1,6 +1,6 @@
 # Roadmap
 
-Status as of 2026-08-12 (herd 0.7.5).
+Status as of 2026-08-12 (herd 0.7.7).
 
 ## Delivered
 
@@ -53,6 +53,13 @@ Status as of 2026-08-12 (herd 0.7.5).
   the size and what else in the repo goes with it
 - `:about` — the build stamp and the machine's own facts (config, tier, memory,
   cache) in one place, rather than spread across four screens
+- A `[mono-focus]` profile: a reserved ini section switched on per preset (`m`
+  on Settings) for one client looping on the same base prompt
+- **Fixed:** the session overrides reached the argv *preview* and not the
+  launch. Both go through `LaunchSettings::argv` now
+- An argv preview that wraps to its pane and scrolls (`J`/`K`, with a
+  scrollbar), instead of clipping a long command at the right edge and the
+  bottom with nothing to say it had
 
 ## Next
 

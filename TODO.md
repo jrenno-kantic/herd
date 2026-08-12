@@ -563,3 +563,88 @@
       which probe the leading number came from. That fact now lives only
       in the docs. Say the word and it can be a word on the line —
       `4.20s cold · last … · avg …` would carry both.
+
+- [x] Add a new models.ini section "mono-focus" (cache-type-k/v, parallel,
+      cache-reuse, keep, slots), activable and overridable in Settings,
+      default disabled. **How to handle this new section in models.ini?**
+      → **as a reserved section name**, like `[server]` and `[*]`.
+    - That is the whole mechanism, and it is the load-bearing part: every
+      *other* section in the file is a preset, so without reserving it the
+      profile would appear on the Models screen as a launchable model with
+      no `hf-repo` — counted in the tier, offered on `Enter`, and unable to
+      run. `ini::is_reserved` is the single place that list lives; a second
+      profile means adding it there.
+    - **Precedence: `[server] → [*] → [model] → mono-focus → overrides →
+      CLI`.** After the preset, because it is switched on precisely to beat
+      what the preset says; before the overrides, so any one of its keys
+      can be taken back from Settings without editing the file. Tests pin
+      both directions.
+    - `m` on the Settings screen switches it **per preset**, off by
+      default, remembered in `~/.herd_config` beside the favourites — on
+      for the model you drive in a loop, off for the one you chat with.
+    - Its keys are listed **only while it is on**, and the heading carries
+      the state: rows that look editable and are not in force are worse
+      than no rows, and editing one while off would quietly create a model
+      override that *is* in force. An ini with no such section says so
+      rather than setting a flag that changes nothing.
+    - Added to both shipped tiers as a worked example — copy it into
+      `~/models/<tier>/models.ini` to use it. The `shipped_*_tier` tests
+      passing unchanged is the proof it is not a preset.
+    - **One deviation from the spec, deliberately:** `slots = 1` is
+      written `slots = true`. `--slots` is a *boolean* in llama.cpp (it
+      exposes the slots monitoring endpoint, already on by default) and the
+      slot **count** is `--parallel`, which the profile already sets to 1.
+      `slots = 1` would emit `--slots 1` and leave a stray `1` on
+      llama-server's command line. Checked against `llama-server --help`.
+
+- [x] **Bug found while wiring the above, and fixed:** the session
+      overrides reached the argv *preview* and never the launch.
+    - `argv_preview` passed `overrides.to_args(model)`;
+      `Executor::spawn_launch` built from the ini alone. So the Models
+      screen drew `--ctx-size 65536` and spawned `--ctx-size 32768` —
+      silently, for as long as the Settings screen has existed, and
+      contradicting the preview's own documented promise to be "the exact
+      argv that launching would spawn".
+    - `LaunchSettings::argv` is now the only place a launch's argv is
+      assembled, and both paths call it. The Executor holds the settings
+      behind an `Arc<RwLock<_>>` refreshed from `main.rs` before each batch
+      of actions — the same shape as `set_config_path`, and for the same
+      reason: the UI owns the state, the Executor is told.
+    - Pinned by `the_launch_argv_carries_the_session_overrides`.
+
+- [x] Add right scrolling to argv preview (if content is larger than the window)
+      → the pane was clipping in **both** directions, and both are the failure
+      `Columns::for_width` and `screen_hint_within` exist to prevent elsewhere.
+    - **Sideways, and this was the worse half.** `wrap_argv` broke at a
+      hard-coded 40 columns and measured only the *flag* when deciding to
+      break, so `--hf-repo` fitted and the 42-character repo reference after
+      it ran past the border and was cut by the terminal — an aperçu that
+      showed a different command from the one it would run. It wraps to the
+      pane's real width now and measures the **whole option, flag and value
+      together**: one option is one unit and is never split. So there is
+      nothing left to scroll *right* to, which is the better answer than a
+      horizontal scrollbar.
+    - **Downwards.** Six rows hold an ordinary preset; a preset with
+      `[mono-focus]` on, or an 80-column terminal, does not. `J`/`K` scroll,
+      and a scrollbar appears on the right border — both **only when
+      something is hidden**, and the border names the keys under the same
+      condition, since advertising a key that would do nothing is its own
+      small lie.
+    - An option longer than the whole pane is folded here rather than left
+      to the terminal or to ratatui's soft wrap, so the line count the
+      scrollbar is built from is the count actually drawn.
+    - **The clamp lives in `App::update`, not at draw time**, so `render`
+      stays a pure function of `App`. The alternative is a counter that
+      climbs while the view stands still — fifty `J` at the bottom and `K`
+      does nothing for the next fifty. That means `App` has to know the
+      pane's geometry, so `preview_pane` hand-counts it exactly as `chrome`
+      does and `UiEvent::Resize` now carries the width as well as the
+      height. The renderer clamps again against the pane it really got, and
+      a resize re-clamps: a wider terminal wraps the same argv into fewer
+      lines.
+    - Moving the cursor returns the preview to the top — a new row is a new
+      command, and staying scrolled into the middle of the previous one is
+      reading the wrong argv.
+    - Both preview panes (Models and Router) are now drawn by one function,
+      since they answer the same question about two different argvs.
+- [ ] Add right scrolling to Hub and Settings screen (if content is larger than the window)

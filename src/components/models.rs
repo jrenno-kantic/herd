@@ -25,7 +25,7 @@ pub fn render(frame: &mut Frame, app: &App, area: Rect) {
     // has to share the space with eight lines of flags is not a bar.
     match &app.llama.download {
         Some(download) => download_bar(frame, download, chunks[1]),
-        None => frame.render_widget(preview(app), chunks[1]),
+        None => preview(frame, app, chunks[1]),
     }
 }
 
@@ -498,44 +498,14 @@ fn describe(app: &App) -> String {
     }
 }
 
-fn preview(app: &App) -> Paragraph<'static> {
-    let text = match app.llama.argv_preview() {
-        Ok(argv) => wrap_argv(&argv),
-        Err(error) => error,
-    };
-
-    // The copy key is advertised here rather than in the footer: that line
-    // is already at its width budget on a 100-column terminal, and the
-    // hint belongs beside what it acts on. Read out of `keys.rs` so the
-    // key named here and the key handled cannot drift apart.
-    let mut block = block(" argv preview ".to_string());
-    if let Some(hint) = keys::hint_for(Screen::Models, "y") {
-        block = block.title_top(Line::styled(format!(" {hint} "), Theme::border()).right_aligned());
-    }
-
-    Paragraph::new(text).style(Theme::logs()).block(block)
-}
-
-/// Renders the argv the way a shell user would write it: one logical
-/// option per line, so a 20-flag command stays readable.
-pub fn wrap_argv(argv: &[String]) -> String {
-    let mut lines = vec!["llama-server \\".to_string()];
-    let mut current = String::from("  ");
-
-    for token in argv {
-        if token.starts_with('-') && current.trim().len() > 2 && current.len() > 40 {
-            lines.push(format!("{} \\", current.trim_end()));
-            current = String::from("  ");
-        }
-        current.push_str(token);
-        current.push(' ');
-    }
-
-    if !current.trim().is_empty() {
-        lines.push(current.trim_end().to_string());
-    }
-
-    lines.join("\n")
+fn preview(frame: &mut Frame, app: &App, area: Rect) {
+    components::argv_preview(
+        frame,
+        area,
+        Screen::Models,
+        app.llama.argv_preview(),
+        app.llama.preview_scroll,
+    );
 }
 
 fn truncate(text: &str, width: usize) -> String {
@@ -719,7 +689,7 @@ mod tests {
             "--port".to_string(),
             "1234".to_string(),
         ];
-        let wrapped = wrap_argv(&argv);
+        let wrapped = components::wrap_argv(&argv, 70).join("\n");
 
         assert!(wrapped.starts_with("llama-server \\"));
         for token in &argv {

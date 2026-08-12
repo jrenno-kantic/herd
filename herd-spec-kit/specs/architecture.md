@@ -129,9 +129,9 @@ drives every entry:
 
 `app.rs` owns a `Screen` (which view is up) and a `Mode` (what a keystroke
 means). Only `Browse` treats letters as shortcuts; `Command`, `Filter`,
-`EditSetting`, `EditPrompt`, `Picker`, `ConfirmLaunch`, `ConfirmQuit`, `Help`
-and `Commands` capture input until answered. New shortcuts belong inside a mode,
-never globally, or they shadow text entry.
+`EditSetting`, `EditPrompt`, `Picker`, `ConfirmLaunch`, `ConfirmQuit`,
+`ConfirmDelete`, `Help`, `Commands` and `About` capture input until answered.
+New shortcuts belong inside a mode, never globally, or they shadow text entry.
 
 Screen digits are positional, so inserting a screen renumbers the rest. Tests
 derive the digit from `Screen::ALL`, and so must any component that names one —
@@ -140,6 +140,13 @@ somewhere else.
 
 `tui.rs::render(frame, app)` is split out of `TerminalSession::draw` so the
 whole UI can be rendered against a headless `TestBackend` in tests.
+
+Two pieces of geometry are hand-counted in `app.rs` rather than read from a
+frame, because `App::update` runs nowhere near one: `chrome` (rows a screen
+spends on things that are not list entries, for the page keys) and
+`preview_pane` (the argv preview's size, for the scroll bound). Both are pinned
+against a real render, since a hand-counted number drifts the moment a screen
+grows a line.
 
 ## Keeping App and Executor in step
 

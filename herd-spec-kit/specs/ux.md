@@ -112,7 +112,12 @@ Test: `Enter` send, `e` edit prompt, `r` reset.
 Stats: `+` / `-` adjust the memory reservation, `r` reset.
 
 Settings: `Up`/`Down` move, `Enter` edit — or *flip* it, when the value is
-`true`/`false`, `on`/`off` or `yes`/`no` — `x` clear one override, `X` clear all.
+`true`/`false`, `on`/`off` or `yes`/`no` — `m` switch the `[mono-focus]` profile
+for this preset, `x` clear one override, `X` clear all.
+
+The profile's keys are listed **only while it is on**, and the heading carries
+the state: rows that look editable and are not in force are worse than no rows,
+and an absent section and a switched-off one look identical otherwise.
 Toggleable rows carry a `[x]`/`[ ]` checkbox so they look different before the
 key is pressed.
 
@@ -126,7 +131,10 @@ the whole buffer fits.
   STARTING/STOPPING, red ERROR, dim OFF
 - Endpoint and uptime appear as soon as a launch starts
 - The argv preview updates as the cursor moves, so the exact command is visible
-  before committing to it
+  before committing to it. It wraps to the pane rather than running off the
+  right edge, and scrolls (`J`/`K`, with a scrollbar) when the command is taller
+  than the pane — a preview that showed only part of a command, silently, would
+  be worse than none
 - Overridden settings are marked `*` and shown next to the ini value they replace
 - Presets the machine cannot hold are drawn in red, tight fits in amber; a
   preset whose size cannot be read is never flagged

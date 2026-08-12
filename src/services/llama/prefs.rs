@@ -55,6 +55,11 @@ pub struct Prefs {
     /// set itself so the file cannot grow duplicates.
     #[serde(default)]
     pub favorites: BTreeSet<String>,
+    /// Presets with the `[mono-focus]` profile switched on. Keyed by name
+    /// like the favourites, and `#[serde(default)]` like everything else
+    /// here, so a file written before this existed still reads.
+    #[serde(default)]
+    pub mono_focus: BTreeSet<String>,
     /// Setting overrides, in the same shape `App` holds them.
     #[serde(default)]
     pub overrides: Overrides,
@@ -150,6 +155,7 @@ mod tests {
 
         Prefs {
             favorites: ["gemma4-12b".to_string(), "qwen3-coder".to_string()].into(),
+            mono_focus: ["qwen3-coder".to_string()].into(),
             overrides,
             router: RouterPrefs {
                 models_max: 3,
