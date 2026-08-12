@@ -1,6 +1,6 @@
 # Roadmap
 
-Status as of 2026-08-12 (herd 0.7.7).
+Status as of 2026-08-12 (herd 0.7.8).
 
 ## Delivered
 

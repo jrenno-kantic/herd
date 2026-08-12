@@ -23,7 +23,7 @@ the cache is holding; menu order follows how often a screen is wanted, not how
 closely it relates to its neighbour.
 
 ```
-┌HERD 0.7.7────────────┐┌ Models · 32gb · ~/models/32gb/models.ini ────────────────────── 1/8 ┐
+┌HERD 0.7.8────────────┐┌ Models · 32gb · ~/models/32gb/models.ini ────────────────────── 1/8 ┐
 │ ▸ 1 Models           ││   NAME            REPO              RAM     OPT CAPS SPEC   LOCAL   │
 │   2 Server           ││▸★●gemma4-12b      unsloth/gemma-4…  7.3G  qat ud    S  mtp         █│
 │   3 Router           ││  ★gemma4-31b      unsloth/gemma-4…~18.3G  qat ud    S  mtp not local│
@@ -90,7 +90,7 @@ appears once the clipboard has actually taken it; if no clipboard tool answered
 cargo run
 cargo run -- --config ~/models/16gb/models.ini   # pick a specific preset file
 cargo run -- --help
-cargo run -- --version                           # herd 0.7.7 (a1b2c3d 2026-08-12)
+cargo run -- --version                           # herd 0.7.8 (a1b2c3d 2026-08-12)
 ```
 
 `--version` reports the commit the binary was built from, with `-dirty` when it
@@ -103,7 +103,7 @@ behaves on this machine:
 ```
 ┌ About ─────────────────────────────────────────────────────────┐
 │                                                                │
-│  herd 0.7.7                                                    │
+│  herd 0.7.8                                                    │
 │  Terminal control plane for llama-server                       │
 │                                                                │
 │  build   cd7ed52-dirty · 2026-08-12                            │
