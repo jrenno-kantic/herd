@@ -6,8 +6,8 @@
 //! hidden below the viewport, which is why 0 means "follow the newest
 //! line" and needs no separate follow flag.
 
-use crate::{app::App, app::Screen, components, keys, theme::Theme};
-use ratatui::layout::{Constraint, Direction, Layout, Margin, Rect};
+use crate::{app::App, app::Screen, components, keys, layout, theme::Theme};
+use ratatui::layout::{Margin, Rect};
 use ratatui::widgets::{
     Block, Borders, Paragraph, Scrollbar, ScrollbarOrientation, ScrollbarState,
 };
@@ -22,13 +22,9 @@ pub fn render(frame: &mut Frame, app: &App, area: Rect) {
     let inner = block.inner(area);
     frame.render_widget(block, area);
 
-    let chunks = Layout::default()
-        .direction(Direction::Vertical)
-        .constraints([Constraint::Min(1), Constraint::Length(1)])
-        .split(inner)
-        .to_vec();
+    let chunks = layout::rows_with_footer(inner, 1);
 
-    let height = chunks[0].height as usize;
+    let height = chunks.first.height as usize;
     let (top, pinned) = viewport(app.logs.len(), height, app.log_scroll);
 
     // Deliberately not wrapped: a wrapped line counts as several rows and
@@ -40,11 +36,11 @@ pub fn render(frame: &mut Frame, app: &App, area: Rect) {
         Paragraph::new(text)
             .style(Theme::logs())
             .scroll((top as u16, 0)),
-        chunks[0],
+        chunks.first,
     );
     frame.render_widget(
-        Paragraph::new(footer(app, top, height, pinned, chunks[1].width)).style(Theme::logs()),
-        chunks[1],
+        Paragraph::new(footer(app, top, height, pinned, chunks.second.width)).style(Theme::logs()),
+        chunks.second,
     );
 
     scrollbar(frame, app.logs.len(), height, top, area);

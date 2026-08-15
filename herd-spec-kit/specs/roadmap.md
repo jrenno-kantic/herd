@@ -1,6 +1,6 @@
 # Roadmap
 
-Status as of 2026-08-12 (herd 0.7.8).
+Status as of 2026-08-13 (herd 0.8.0).
 
 ## Delivered
 
@@ -69,9 +69,11 @@ Status as of 2026-08-12 (herd 0.7.8).
 Tracked in `doc/PROMPT_NEXT_STEPS.md` (French). Highlights: auto-restart on
 crash, a full end-to-end test against a real `llama-server` (spawn, model load,
 kill), flagging presets duplicated across tiers, reading vision support from the
-repo listing rather than the model name, a `QUANT` column, sizing a preset that
-is *not* yet downloaded from the HuggingFace tree API, and covering router mode
-with the port-in-use prompt.
+repo listing rather than the model name, a `QUANT` column, and sizing a preset
+that is *not* yet downloaded from the HuggingFace tree API. (Covering router
+mode with the port-in-use prompt shipped: `:router` asks the same question as
+`launch`, with `router!` as its hidden force variant, and a hot-swap announces
+the stop of the previous server instead of waiting silently.)
 
 ## Retired
 

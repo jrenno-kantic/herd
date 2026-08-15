@@ -658,10 +658,15 @@ compterait des *builds*, pas des changements.
    :1234, et `process.rs` valide STARTING → SERVING contre un faux serveur
    HTTP. Manque encore un test bout en bout contre un vrai `llama-server`
    (spawn + chargement de modèle + kill).
-3. **Le prompt de port occupé ne couvre pas le mode routeur.** L'écran Router
-   existe désormais (`4`) avec ses deux nombres et son aperçu argv, mais un
-   port déjà pris y ressort comme l'erreur de bind de llama-server, pas comme
-   la question posée à l'utilisateur.
+3. **~~Le prompt de port occupé ne couvre pas le mode routeur.~~ Corrigé.**
+   `:router` pose désormais la même question que `launch` quand le port est
+   tenu par un processus que herd n'a pas lancé (variante forcée cachée
+   `router!`, même esprit que `launch!`). Au passage : le hot-swap annonce
+   STOPPING avant d'arrêter le serveur précédent — l'arrêt silencieux d'un
+   gros modèle en train de paginer ressemblait à un blocage du routeur au
+   démarrage — et un arrêt qui dépasse sa grâce (`Stopped::Abandoned`)
+   refuse le spawn en nommant la cause, au lieu de laisser l'erreur de bind
+   brute de llama-server surgir une seconde plus tard.
 4. **L'estimation mémoire reste une heuristique pour ce qui n'est pas
    téléchargé.** Un preset présent en cache est maintenant mesuré sur son
    fichier ; les autres sont toujours calculés à partir du nom, et le cache KV

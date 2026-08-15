@@ -9,7 +9,7 @@
 
 use crate::{
     app::{App, Screen},
-    components, keys,
+    components, keys, layout,
     services::llama::LauncherMode,
     theme::Theme,
 };
@@ -19,13 +19,10 @@ use ratatui::widgets::{Block, Borders, List, ListItem, ListState, Paragraph};
 use ratatui::Frame;
 
 pub fn render(frame: &mut Frame, app: &App, area: Rect) {
-    let chunks = Layout::default()
-        .direction(Direction::Vertical)
-        .constraints([Constraint::Min(7), Constraint::Length(8)])
-        .split(area);
+    let chunks = layout::with_preview(area);
 
-    settings(frame, app, chunks[0]);
-    preview(frame, app, chunks[1]);
+    settings(frame, app, chunks.first);
+    preview(frame, app, chunks.second);
 }
 
 fn settings(frame: &mut Frame, app: &App, area: Rect) {

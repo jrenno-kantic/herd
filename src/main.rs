@@ -37,6 +37,9 @@ Options:
 /// swallow a startup log burst, small enough that the screen still updates
 /// while one is arriving.
 const DRAIN_LIMIT: usize = 256;
+/// Enough room for ordinary startup output, but finite when a process
+/// writes faster than a terminal can render indefinitely.
+const LOG_CHANNEL_CAPACITY: usize = 1_024;
 
 #[tokio::main]
 async fn main() -> Result<()> {
@@ -77,9 +80,10 @@ async fn main() -> Result<()> {
     let mut app = App::restored(config_path.clone(), session.model.clone(), prefs);
     let mut terminal = tui::TerminalSession::enter()?;
     let (event_tx, mut event_rx) = mpsc::unbounded_channel();
+    let (log_tx, mut log_rx) = event::log_channel(LOG_CHANNEL_CAPACITY);
 
     let _events = EventStream::start(event_tx.clone());
-    let executor = Executor::new(event_tx, config_path);
+    let executor = Executor::with_log_sender(event_tx, config_path, log_tx);
 
     // Crossterm only reports a resize when one happens, so the starting
     // size has to be asked for. Without it the page keys would move by the
@@ -94,7 +98,19 @@ async fn main() -> Result<()> {
 
     terminal.draw(&app)?;
 
-    'events: while let Some(event) = event_rx.recv().await {
+    'events: loop {
+        let event = tokio::select! {
+            event = event_rx.recv() => event,
+            line = log_rx.recv() => line.map(event::UiEvent::Log),
+        };
+        let Some(event) = event else { break };
+
+        let dropped = log_rx.take_dropped();
+        if dropped > 0 {
+            app.push_log(format!(
+                "{dropped} process log line(s) dropped during a burst"
+            ));
+        }
         // Handle everything already queued before drawing once.
         //
         // A loading llama-server emits its output in bursts of hundreds of
@@ -106,13 +122,13 @@ async fn main() -> Result<()> {
         let mut idle = matches!(event, event::UiEvent::Tick);
         let mut actions = vec![app.update(event)];
         for _ in 0..DRAIN_LIMIT {
-            match event_rx.try_recv() {
-                Ok(event) => {
-                    idle &= matches!(event, event::UiEvent::Tick);
-                    actions.push(app.update(event));
-                }
-                Err(_) => break,
-            }
+            let event = event_rx
+                .try_recv()
+                .ok()
+                .or_else(|| log_rx.try_recv().ok().map(event::UiEvent::Log));
+            let Some(event) = event else { break };
+            idle &= matches!(event, event::UiEvent::Tick);
+            actions.push(app.update(event));
         }
 
         // The overrides and mono-focus toggles the UI holds, handed over

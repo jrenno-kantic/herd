@@ -13,11 +13,11 @@
 
 use crate::{
     app::{App, HubRow, Screen},
-    components, keys,
+    components, keys, layout,
     services::llama::hub::human_bytes,
     theme::Theme,
 };
-use ratatui::layout::{Constraint, Direction, Layout, Rect};
+use ratatui::layout::Rect;
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, List, ListItem, ListState, Paragraph};
 use ratatui::Frame;
@@ -43,24 +43,13 @@ pub fn render(frame: &mut Frame, app: &App, area: Rect) {
     let inner = block.inner(area);
     frame.render_widget(block, area);
 
-    let chunks = Layout::default()
-        .direction(Direction::Vertical)
-        .constraints([
-            Constraint::Length(1),
-            Constraint::Min(1),
-            // What the cache costs, then what the keys do — the same split
-            // as the Models footer, for the same reason: the summary is the
-            // half that grows.
-            Constraint::Length(2),
-        ])
-        .split(inner)
-        .to_vec();
+    let chunks = layout::list(inner, 1, 2);
 
-    let columns = Columns::for_width(chunks[0].width as usize);
+    let columns = Columns::for_width(chunks.header.width as usize);
 
     frame.render_widget(
         Paragraph::new(Line::styled(columns.header(), Theme::border())),
-        chunks[0],
+        chunks.header,
     );
     frame.render_widget(
         Paragraph::new(vec![
@@ -70,13 +59,13 @@ pub fn render(frame: &mut Frame, app: &App, area: Rect) {
                     "  {}",
                     keys::screen_hint_within(
                         Screen::Hub,
-                        components::hint_width(chunks[2].width, false, 0)
+                        components::hint_width(chunks.footer.width, false, 0)
                     )
                 ),
                 Theme::logs(),
             ),
         ]),
-        chunks[2],
+        chunks.footer,
     );
 
     // Nothing is claimed before llama.cpp has answered — an empty list and
@@ -87,7 +76,7 @@ pub fn render(frame: &mut Frame, app: &App, area: Rect) {
             true => "llama.cpp reports no models in its cache".to_string(),
             false => "asking llama-server what it has…".to_string(),
         };
-        frame.render_widget(Paragraph::new(message).style(Theme::logs()), chunks[1]);
+        frame.render_widget(Paragraph::new(message).style(Theme::logs()), chunks.rows);
         return;
     }
 
@@ -118,11 +107,11 @@ pub fn render(frame: &mut Frame, app: &App, area: Rect) {
 
     let mut state =
         ListState::default().with_selected(Some(app.llama.hub_cursor.min(rows.len() - 1)));
-    frame.render_stateful_widget(List::new(items), chunks[1], &mut state);
+    frame.render_stateful_widget(List::new(items), chunks.rows, &mut state);
 
     components::list_scrollbar(
         frame,
-        chunks[1],
+        chunks.rows,
         area.x + area.width.saturating_sub(1),
         rows.len(),
         app.llama.hub_cursor,

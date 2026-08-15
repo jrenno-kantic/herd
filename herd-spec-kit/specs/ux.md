@@ -100,7 +100,11 @@ Router: `j`/`k` move between the two settings, `+`/`-` adjust them, `Enter`
 starts the router with exactly what is on screen, `s` stops it, `r` resets both,
 `y` copies the command. `Enter` is always allowed here, unlike the Server
 screen's — the numbers it starts with are the ones on screen, and having just
-changed one is the reason to press it.
+changed one is the reason to press it. Starting over a serving preset hot-swaps
+it, announced as STOPPING first — the stop of a big paging model takes long
+enough that a silent one reads as a hang. A port held by a process herd did not
+start raises the same port-in-use prompt as a launch (confirming re-dispatches
+the hidden `router!`).
 
 Server: `s` stop, `p` ping, `Enter` launch selected — refused when the selected
 preset is the one already serving, since relaunching it is a stop and a full

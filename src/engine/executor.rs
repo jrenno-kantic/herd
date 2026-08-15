@@ -9,6 +9,7 @@ use tokio::sync::mpsc;
 #[derive(Clone)]
 pub struct Executor {
     tx: mpsc::UnboundedSender<UiEvent>,
+    logs: Option<crate::event::LogSender>,
     llama: Supervisor,
     /// The `hf` process, while one is running. Held so that quitting can
     /// stop it rather than leave it writing into the cache after the UI
@@ -31,10 +32,28 @@ pub struct Executor {
 }
 
 impl Executor {
+    #[cfg(test)]
     pub fn new(tx: mpsc::UnboundedSender<UiEvent>, config_path: PathBuf) -> Self {
+        Self::build(tx, config_path, None)
+    }
+
+    pub fn with_log_sender(
+        tx: mpsc::UnboundedSender<UiEvent>,
+        config_path: PathBuf,
+        logs: crate::event::LogSender,
+    ) -> Self {
+        Self::build(tx, config_path, Some(logs))
+    }
+
+    fn build(
+        tx: mpsc::UnboundedSender<UiEvent>,
+        config_path: PathBuf,
+        logs: Option<crate::event::LogSender>,
+    ) -> Self {
         Self {
             tx,
-            llama: Supervisor::new(),
+            llama: Supervisor::with_logs(logs.clone()),
+            logs,
             download: Arc::new(tokio::sync::Mutex::new(None)),
             config_path: Arc::new(RwLock::new(config_path)),
             launch: Arc::new(RwLock::new(llama::ini::LaunchSettings::default())),
@@ -102,13 +121,23 @@ impl Executor {
                 .to_string();
             return self.spawn_launch(rest, false);
         }
+        // Same shape as `launch!`: the port-in-use check already answered,
+        // emitted by the confirmation prompt and never typed.
+        if trimmed == "router!" || trimmed.starts_with("router! ") {
+            let rest = trimmed
+                .strip_prefix("router!")
+                .unwrap_or("")
+                .trim()
+                .to_string();
+            return self.spawn_router(rest, true);
+        }
         if trimmed == "router" || trimmed.starts_with("router ") {
             let rest = trimmed
                 .strip_prefix("router")
                 .unwrap_or("")
                 .trim()
                 .to_string();
-            return self.spawn_router(rest);
+            return self.spawn_router(rest, false);
         }
         if trimmed == "stop" {
             return self.spawn_stop();
@@ -318,7 +347,14 @@ impl Executor {
                 files.clone(),
                 total,
             );
-            let outcome = fetch(&repo, &files, &tx, &executor.download).await;
+            let outcome = fetch(
+                &repo,
+                &files,
+                &tx,
+                executor.logs.clone(),
+                &executor.download,
+            )
+            .await;
             progress.abort();
 
             // A zero exit from `hf` is not proof the model is usable.
@@ -434,7 +470,11 @@ impl Executor {
             {
                 let _ = tx.send(UiEvent::PortInUse {
                     port,
-                    model: model.clone(),
+                    name: model.clone(),
+                    // The full rest, not just the model: a confirmed
+                    // launch with `-- extra` args retries as what was
+                    // typed, not a trimmed rebuild of it.
+                    retry: format!("launch! {rest}"),
                 });
                 return guard.complete(format!("port {port} busy, waiting for confirmation"));
             }
@@ -471,7 +511,7 @@ impl Executor {
         });
     }
 
-    fn spawn_router(&self, rest: String) {
+    fn spawn_router(&self, rest: String, force: bool) {
         let tx = self.tx.clone();
         let supervisor = self.llama.clone();
         let config_path = self.config_path();
@@ -481,24 +521,43 @@ impl Executor {
                 CompletionGuard::new(tx.clone(), format!("router {rest}").trim().to_string());
             let (models_max, sleep_idle, extra) = parse_router_flags(&rest);
 
-            let output = match llama::load(&config_path) {
-                Err(error) => format!("config error: {error}"),
-                Ok(config) => {
-                    let args =
-                        llama::ini::build_router_args(&config, models_max, sleep_idle, &extra);
-                    let base_url = llama::api::base_url(&config.client_host(), config.port());
-                    match supervisor
-                        .spawn(LauncherMode::Router, None, args, base_url, tx.clone(), None)
-                        .await
-                    {
-                        Ok(()) => format!(
-                            "spawning llama-server router (models-max={models_max}, sleep-idle={sleep_idle}s)"
-                        ),
-                        Err(error) => {
-                            send_error(&tx, LauncherMode::Router, None, &error);
-                            error
-                        }
-                    }
+            let config = match llama::load(&config_path) {
+                Ok(config) => config,
+                Err(error) => return guard.complete(format!("config error: {error}")),
+            };
+
+            let host = config.client_host();
+            let port = config.port();
+
+            // The same question the launch path asks, for the same reason:
+            // a port held by something herd did not start used to surface
+            // here as llama-server's own bind error a moment after
+            // STARTING — an answer in the plumbing's terms. When herd owns
+            // the process, `spawn` hot-swaps it and announces the stop.
+            if !force
+                && !supervisor.is_running().await
+                && llama::api::port_in_use_settled(&host, port).await
+            {
+                let _ = tx.send(UiEvent::PortInUse {
+                    port,
+                    name: "router".into(),
+                    retry: format!("router! {rest}").trim().to_string(),
+                });
+                return guard.complete(format!("port {port} busy, waiting for confirmation"));
+            }
+
+            let args = llama::ini::build_router_args(&config, models_max, sleep_idle, &extra);
+            let base_url = llama::api::base_url(&host, port);
+            let output = match supervisor
+                .spawn(LauncherMode::Router, None, args, base_url, tx.clone(), None)
+                .await
+            {
+                Ok(()) => format!(
+                    "spawning llama-server router (models-max={models_max}, sleep-idle={sleep_idle}s)"
+                ),
+                Err(error) => {
+                    send_error(&tx, LauncherMode::Router, None, &error);
+                    error
                 }
             };
 
@@ -591,6 +650,7 @@ async fn fetch(
     repo: &str,
     files: &[llama::hub::RepoFile],
     tx: &mpsc::UnboundedSender<UiEvent>,
+    logs: Option<crate::event::LogSender>,
     slot: &Arc<tokio::sync::Mutex<Option<tokio::process::Child>>>,
 ) -> Result<(), String> {
     use tokio::io::{AsyncBufReadExt, BufReader};
@@ -628,7 +688,13 @@ async fn fetch(
                 // carry a whole download's worth of frames. Only the last
                 // is current.
                 if let Some(latest) = line.rsplit('\r').find(|part| !part.trim().is_empty()) {
-                    let _ = tx.send(UiEvent::Log(latest.trim().to_string()));
+                    let latest = latest.trim().to_string();
+                    match &logs {
+                        Some(logs) => logs.send(latest),
+                        None => {
+                            let _ = tx.send(UiEvent::Log(latest));
+                        }
+                    }
                 }
             }
         });
@@ -969,6 +1035,49 @@ mod tests {
                 command.usage
             );
         }
+    }
+
+    /// The router used to be the one launch path without the port
+    /// question: a port held by a process herd did not start surfaced as
+    /// llama-server's own bind error a moment after STARTING. It asks
+    /// first now, exactly like `launch`, and the event carries the force
+    /// command a yes re-dispatches — numbers included, verbatim.
+    #[tokio::test]
+    async fn router_asks_before_binding_a_busy_port() {
+        // A real listener herd did not start, holding the port.
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("bind");
+        let port = listener.local_addr().expect("addr").port();
+
+        let config = std::env::temp_dir().join(format!(
+            "herd-router-port-{}-{:?}.ini",
+            std::process::id(),
+            std::thread::current().id()
+        ));
+        std::fs::write(
+            &config,
+            format!("[server]\nhost = 127.0.0.1\nport = {port}\n\n[a-model]\nhf-repo = v/m:Q4\n"),
+        )
+        .expect("write config");
+
+        let (tx, mut rx) = mpsc::unbounded_channel();
+        let executor = Executor::new(tx, config.clone());
+        executor.run_command("router --max 3 --idle 120".into());
+
+        let mut asked = None;
+        let output = loop {
+            match rx.recv().await.expect("a completion") {
+                UiEvent::PortInUse { port, name, retry } => asked = Some((port, name, retry)),
+                UiEvent::CommandFinished { output, .. } => break output,
+                _ => continue,
+            }
+        };
+        let _ = std::fs::remove_file(&config);
+
+        let (asked_port, name, retry) = asked.expect("the busy port raised no question");
+        assert_eq!(asked_port, port);
+        assert_eq!(name, "router");
+        assert_eq!(retry, "router! --max 3 --idle 120");
+        assert!(output.contains("busy"), "{output}");
     }
 
     /// The line this replaced, end to end:

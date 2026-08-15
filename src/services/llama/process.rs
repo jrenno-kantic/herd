@@ -90,11 +90,20 @@ struct Supervised {
 pub struct Supervisor {
     child: Arc<Mutex<Option<Supervised>>>,
     launches: Arc<AtomicU64>,
+    logs: Option<crate::event::LogSender>,
 }
 
 impl Supervisor {
+    #[cfg(test)]
     pub fn new() -> Self {
         Self::default()
+    }
+
+    pub fn with_logs(logs: Option<crate::event::LogSender>) -> Self {
+        Self {
+            logs,
+            ..Self::default()
+        }
     }
 
     /// Stop whatever is currently supervised, if anything.
@@ -190,7 +199,24 @@ impl Supervisor {
         tx: mpsc::UnboundedSender<UiEvent>,
         repo: Option<String>,
     ) -> Result<(), String> {
-        self.stop().await;
+        // A hot-swap stops the previous process first, and with a big
+        // model paging out that stop takes seconds to tens of seconds.
+        // Doing it silently left the UI frozen on SERVING for the whole
+        // wait — pressing enter on the Router screen with a model up
+        // looked exactly like a hang. Announce it, but only when there is
+        // something to stop: flashing STOPPING on a cold start would be a
+        // transition that never happened (same rule as `stop_announced`).
+        if self.is_running().await {
+            let _ = tx.send(UiEvent::LlamaStatus(LlamaSnapshot::new(
+                ServerState::Stopping,
+                mode,
+                None,
+            )));
+        }
+
+        if let Some(reason) = swap_refusal(self.stop().await) {
+            return Err(reason);
+        }
 
         let _ = tx.send(UiEvent::LlamaStatus(LlamaSnapshot::new(
             ServerState::Starting,
@@ -217,10 +243,10 @@ impl Supervisor {
         *self.child.lock().await = Some(Supervised { child, generation });
 
         if let Some(stdout) = stdout {
-            spawn_line_forwarder(stdout, tx.clone());
+            spawn_line_forwarder(stdout, tx.clone(), self.logs.clone());
         }
         if let Some(stderr) = stderr {
-            spawn_line_forwarder(stderr, tx.clone());
+            spawn_line_forwarder(stderr, tx.clone(), self.logs.clone());
         }
 
         spawn_health_poller(
@@ -235,6 +261,23 @@ impl Supervisor {
         spawn_exit_watcher(self.child.clone(), generation, tx, mode, model);
 
         Ok(())
+    }
+}
+
+/// Whether a hot-swap may proceed after stopping the previous process.
+///
+/// An `Abandoned` stop means the predecessor is still tearing down and
+/// still holds its port — spawning into it guarantees llama-server's raw
+/// "couldn't bind HTTP server socket" a moment later, which is the least
+/// useful way to learn what happened. Refusing with the actual cause turns
+/// a confusing bind error into an instruction.
+fn swap_refusal(stopped: Stopped) -> Option<String> {
+    match stopped {
+        Stopped::Abandoned => Some(format!(
+            "the previous {BINARY} is still shutting down and holds the port — \
+             try again in a few seconds"
+        )),
+        Stopped::Nothing | Stopped::Terminated | Stopped::Killed => None,
     }
 }
 
@@ -647,15 +690,20 @@ async fn wait_for(child: &mut Child, grace: Duration) -> bool {
     tokio::time::timeout(grace, child.wait()).await.is_ok()
 }
 
-fn spawn_line_forwarder<R>(reader: R, tx: mpsc::UnboundedSender<UiEvent>)
-where
+fn spawn_line_forwarder<R>(
+    reader: R,
+    tx: mpsc::UnboundedSender<UiEvent>,
+    logs: Option<crate::event::LogSender>,
+) where
     R: AsyncRead + Unpin + Send + 'static,
 {
     tokio::spawn(async move {
         let mut lines = BufReader::new(reader).lines();
         while let Ok(Some(line)) = lines.next_line().await {
-            if tx.send(UiEvent::Log(line)).is_err() {
-                break;
+            match &logs {
+                Some(logs) => logs.send(line),
+                None if tx.send(UiEvent::Log(line)).is_err() => break,
+                None => {}
             }
         }
     });
@@ -995,6 +1043,101 @@ while True:
             Some(&ServerState::Off),
             "a retired poller reported after the stop: {states:?}"
         );
+    }
+
+    /// A hot-swap must say it is stopping the previous process. The stop
+    /// is bounded but not instant — a big model paging out takes seconds
+    /// to tens of seconds to die — and doing it silently left the UI
+    /// frozen on SERVING for the whole wait, which is exactly what "the
+    /// router hangs to start when a model is already serving" looks like.
+    #[tokio::test]
+    async fn a_hot_swap_announces_the_stop() {
+        let supervisor = Supervisor::new();
+        let (tx, mut rx) = mpsc::unbounded_channel();
+
+        supervisor
+            .spawn_program(
+                "/bin/sleep",
+                LauncherMode::Manual,
+                Some("first".into()),
+                vec!["30".into()],
+                "http://127.0.0.1:1".into(),
+                tx.clone(),
+                None,
+            )
+            .await
+            .expect("spawn first");
+
+        supervisor
+            .spawn_program(
+                "/bin/sleep",
+                LauncherMode::Router,
+                None,
+                vec!["30".into()],
+                "http://127.0.0.1:1".into(),
+                tx.clone(),
+                None,
+            )
+            .await
+            .expect("spawn second");
+        supervisor.stop().await;
+
+        let mut states = Vec::new();
+        while let Ok(event) = rx.try_recv() {
+            if let UiEvent::LlamaStatus(snapshot) = event {
+                // Only the lifecycle events the spawns emit themselves: a
+                // health poller that got a probe in before the drain adds
+                // phase-carrying snapshots this test is not about.
+                if snapshot.phase == Phase::None {
+                    states.push((snapshot.state, snapshot.mode));
+                }
+            }
+        }
+
+        assert_eq!(
+            states,
+            vec![
+                (ServerState::Starting, LauncherMode::Manual),
+                // The swap: stopping, in the mode being started, so the
+                // screen the user pressed enter on shows it immediately.
+                (ServerState::Stopping, LauncherMode::Router),
+                (ServerState::Starting, LauncherMode::Router),
+            ],
+            "the swap happened without saying so"
+        );
+    }
+
+    /// ...but a spawn with nothing running must not flash STOPPING — the
+    /// same rule as `stop_announced`: never show a transition that did
+    /// not happen.
+    #[tokio::test]
+    async fn a_cold_spawn_does_not_flash_stopping() {
+        let supervisor = Supervisor::new();
+        let mut rx = spawn_sleeper(&supervisor).await;
+        supervisor.stop().await;
+
+        while let Ok(event) = rx.try_recv() {
+            if let UiEvent::LlamaStatus(snapshot) = event {
+                assert_ne!(
+                    snapshot.state,
+                    ServerState::Stopping,
+                    "a cold start announced a stop that never happened"
+                );
+            }
+        }
+    }
+
+    /// A stop that ran out its grace leaves the predecessor alive and
+    /// still holding the port. Spawning into that guarantees a raw bind
+    /// error moments later; the refusal has to name the actual cause.
+    #[test]
+    fn an_abandoned_stop_refuses_the_swap() {
+        let refusal = swap_refusal(Stopped::Abandoned).expect("must refuse");
+        assert!(refusal.contains("shutting down"), "{refusal}");
+
+        for stopped in [Stopped::Nothing, Stopped::Terminated, Stopped::Killed] {
+            assert_eq!(swap_refusal(stopped), None, "{stopped:?} blocked a swap");
+        }
     }
 
     /// Hot-swapping replaces the child in the shared slot. The watchers

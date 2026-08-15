@@ -151,7 +151,7 @@ pub fn render(frame: &mut Frame, app: &App, area: Rect) {
 
 fn title(reason: &Confirm) -> &'static str {
     match reason {
-        Confirm::PortInUse(_) => " Port in use ",
+        Confirm::PortInUse { .. } => " Port in use ",
         Confirm::TooLarge { .. } => " Not enough memory ",
         Confirm::NotDownloaded { .. } => " Not downloaded ",
     }
@@ -160,7 +160,7 @@ fn title(reason: &Confirm) -> &'static str {
 /// The problem, in the user's terms.
 fn explain(reason: &Confirm) -> Vec<String> {
     match reason {
-        Confirm::PortInUse(port) => vec![format!("Port {port} is already in use.")],
+        Confirm::PortInUse { port, .. } => vec![format!("Port {port} is already in use.")],
         Confirm::TooLarge { estimate, budget } => vec![format!(
             "This preset is estimated at {estimate:.1} GiB, over the {budget:.1} GiB budget."
         )],
@@ -174,7 +174,7 @@ fn explain(reason: &Confirm) -> Vec<String> {
 /// What follows from it, so the modal is not just an obstacle.
 fn advice(reason: &Confirm) -> String {
     match reason {
-        Confirm::PortInUse(_) => {
+        Confirm::PortInUse { .. } => {
             "herd did not start that process and will not stop it.".to_string()
         }
         Confirm::TooLarge { .. } => {
@@ -194,7 +194,10 @@ mod tests {
     /// same whatever went wrong tells the user nothing.
     #[test]
     fn each_reason_explains_itself_differently() {
-        let port = Confirm::PortInUse(1234);
+        let port = Confirm::PortInUse {
+            port: 1234,
+            retry: "launch! gemma4-12b".into(),
+        };
         let memory = Confirm::TooLarge {
             estimate: 18.2,
             budget: 12.0,

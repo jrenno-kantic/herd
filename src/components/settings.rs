@@ -4,11 +4,11 @@
 
 use crate::{
     app::{App, Mode, Screen, SettingRow},
-    components, keys,
+    components, keys, layout,
     services::llama::overrides,
     theme::Theme,
 };
-use ratatui::layout::{Constraint, Direction, Layout, Rect};
+use ratatui::layout::Rect;
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, List, ListItem, ListState, Paragraph};
 use ratatui::Frame;
@@ -40,19 +40,15 @@ pub fn render(frame: &mut Frame, app: &App, area: Rect) {
         return;
     }
 
-    let chunks = Layout::default()
-        .direction(Direction::Vertical)
-        .constraints([Constraint::Min(1), Constraint::Length(1)])
-        .split(inner)
-        .to_vec();
+    let chunks = layout::rows_with_footer(inner, 1);
 
     frame.render_widget(
         Paragraph::new(format!(
             "  {}",
-            footer(app, components::hint_width(chunks[1].width, false, 0))
+            footer(app, components::hint_width(chunks.second.width, false, 0))
         ))
         .style(Theme::logs()),
-        chunks[1],
+        chunks.second,
     );
 
     let selected_index = app
@@ -61,7 +57,7 @@ pub fn render(frame: &mut Frame, app: &App, area: Rect) {
         .get(app.llama.settings_cursor)
         .copied();
 
-    let width = chunks[0].width as usize;
+    let width = chunks.first.width as usize;
 
     // One item per row, so the list's selection index is an index into
     // `rows` — headers included, which is why they are a two-line item
@@ -133,7 +129,7 @@ pub fn render(frame: &mut Frame, app: &App, area: Rect) {
     }
 
     let mut state = ListState::default().with_selected(selected_index);
-    frame.render_stateful_widget(List::new(items), chunks[0], &mut state);
+    frame.render_stateful_widget(List::new(items), chunks.first, &mut state);
 
     // Counted in rows, not items: a section header is drawn as a blank
     // line plus a title, so a bar that treated it as one row would sit
@@ -148,7 +144,7 @@ pub fn render(frame: &mut Frame, app: &App, area: Rect) {
 
     components::tall_list_scrollbar(
         frame,
-        chunks[0],
+        chunks.first,
         area.x + area.width.saturating_sub(1),
         &heights,
         selected_index.unwrap_or(0),

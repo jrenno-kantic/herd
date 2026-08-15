@@ -23,7 +23,7 @@ the cache is holding; menu order follows how often a screen is wanted, not how
 closely it relates to its neighbour.
 
 ```
-┌HERD 0.7.8────────────┐┌ Models · 32gb · ~/models/32gb/models.ini ────────────────────── 1/8 ┐
+┌HERD 0.8.0────────────┐┌ Models · 32gb · ~/models/32gb/models.ini ────────────────────── 1/8 ┐
 │ ▸ 1 Models           ││   NAME            REPO              RAM     OPT CAPS SPEC   LOCAL   │
 │   2 Server           ││▸★●gemma4-12b      unsloth/gemma-4…  7.3G  qat ud    S  mtp         █│
 │   3 Router           ││  ★gemma4-31b      unsloth/gemma-4…~18.3G  qat ud    S  mtp not local│
@@ -90,7 +90,7 @@ appears once the clipboard has actually taken it; if no clipboard tool answered
 cargo run
 cargo run -- --config ~/models/16gb/models.ini   # pick a specific preset file
 cargo run -- --help
-cargo run -- --version                           # herd 0.7.8 (a1b2c3d 2026-08-12)
+cargo run -- --version                           # herd 0.8.0 (a1b2c3d 2026-08-13)
 ```
 
 `--version` reports the commit the binary was built from, with `-dirty` when it
@@ -103,10 +103,10 @@ behaves on this machine:
 ```
 ┌ About ─────────────────────────────────────────────────────────┐
 │                                                                │
-│  herd 0.7.8                                                    │
+│  herd 0.8.0                                                    │
 │  Terminal control plane for llama-server                       │
 │                                                                │
-│  build   cd7ed52-dirty · 2026-08-12                            │
+│  build   cd7ed52-dirty · 2026-08-13                            │
 │                uncommitted changes — not reproducible          │
 │                                                                │
 │  config  …enno/Documents/development/herd/data/32gb/models.ini │
@@ -668,7 +668,7 @@ Tiers commonly share a port, so launching from one while another is serving woul
 └──────────────────────────────────────────────────────────┘
 ```
 
-It never kills a process it did not spawn. When the process on that port *is* herd's own, launching hot-swaps it cleanly with no prompt.
+It never kills a process it did not spawn. When the process on that port *is* herd's own, launching hot-swaps it cleanly with no prompt — and says STOPPING while the old server dies, since a big model paging out can take tens of seconds to release its memory, and a silent wait is indistinguishable from a hang. The same question covers `:router`, which used to fail with llama-server's raw bind error instead of being asked.
 
 ## Router mode
 
@@ -705,7 +705,10 @@ single preset serving from the Models screen is not this screen's business, and
 showing SERVING for it would claim the router was up when it is not.
 
 `[server]` is shared: the router binds the same host and port your presets do,
-so it and a manually launched preset cannot run at once.
+so it and a manually launched preset cannot run at once. Starting the router
+over a serving preset hot-swaps it — announced as STOPPING, then STARTING —
+and a port held by a server herd did not start raises the same port-in-use
+question as a launch.
 
 ## Commands
 
@@ -766,8 +769,8 @@ Enter rather than after it.
 The listing and the dispatcher are the same table (`commands.rs`), checked
 against each other by a test that drives every documented command and fails if
 one comes back "Unknown command" — the same bargain `keys.rs` makes for the
-keymap. `launch!`, the forced variant the port-in-use prompt emits, is
-deliberately not listed: it skips a check that exists for a reason.
+keymap. `launch!` and `router!`, the forced variants the port-in-use prompt
+emits, are deliberately not listed: they skip a check that exists for a reason.
 
 ## Test
 

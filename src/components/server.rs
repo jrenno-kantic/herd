@@ -3,11 +3,11 @@
 
 use crate::{
     app::{App, Screen},
-    components, keys,
+    components, keys, layout,
     services::llama::ServerState,
     theme::Theme,
 };
-use ratatui::layout::{Constraint, Direction, Layout, Rect};
+use ratatui::layout::Rect;
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, Paragraph};
 use ratatui::Frame;
@@ -15,13 +15,10 @@ use ratatui::Frame;
 const TAIL_LINES: usize = 12;
 
 pub fn render(frame: &mut Frame, app: &App, area: Rect) {
-    let chunks = Layout::default()
-        .direction(Direction::Vertical)
-        .constraints([Constraint::Length(10), Constraint::Min(3)])
-        .split(area);
+    let chunks = layout::server(area);
 
-    frame.render_widget(summary(app, chunks[0].width), chunks[0]);
-    frame.render_widget(tail(app), chunks[1]);
+    frame.render_widget(summary(app, chunks.first.width), chunks.first);
+    frame.render_widget(tail(app), chunks.second);
 }
 
 fn summary(app: &App, width: u16) -> Paragraph<'static> {

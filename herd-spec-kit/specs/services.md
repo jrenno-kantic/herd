@@ -66,7 +66,11 @@ Fixtures for this service live in `data/` (a snapshot of `~/models/`); they are
 parsed by the tests but never used to resolve config at runtime.
 
 Two launch modes: **manual** (one preset at a time, hot-swapped) and **router**
-(one long-lived process that loads and unloads models itself).
+(one long-lived process that loads and unloads models itself). A hot-swap
+announces STOPPING before stopping the previous process — that stop is bounded
+but not instant, and doing it silently read as a hang — and a stop that runs
+out its grace (`Abandoned`) refuses the spawn by naming the cause, since the
+predecessor still holds the port and a spawn would only reap a raw bind error.
 
 Either llama-server *or* `hf` can be the one downloading — a launch fetches its
 own weights when they are absent — so anything that watches a download has to

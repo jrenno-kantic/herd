@@ -1,7 +1,7 @@
 use crate::services::llama::{api::ChatOutcome, hub::CachedModel, LlamaSnapshot};
 use crossterm::event::{self, Event, KeyEvent, KeyEventKind};
 use std::sync::{
-    atomic::{AtomicBool, Ordering},
+    atomic::{AtomicBool, AtomicUsize, Ordering},
     Arc,
 };
 use std::time::Duration;
@@ -24,10 +24,16 @@ pub enum UiEvent {
     LlamaStatus(LlamaSnapshot),
     /// The configured port is already bound by a process herd did not
     /// start. The UI asks before launching rather than killing something
-    /// it has no claim over.
+    /// it has no claim over. `name` is what the prompt calls the thing
+    /// that was refused ("gemma4-12b", "router"); `retry` is the force
+    /// command a yes re-dispatches, authored by the Executor that refused
+    /// it — the one place that knows the full command line, so a launch
+    /// with `-- extra` args or a router with its numbers comes back
+    /// verbatim rather than being rebuilt from parts.
     PortInUse {
         port: u16,
-        model: String,
+        name: String,
+        retry: String,
     },
     /// A chat probe finished (the `test_call.sh` equivalent). Carries the
     /// structured outcome rather than a formatted line, so the Test screen
@@ -57,13 +63,70 @@ pub enum UiEvent {
     /// Every component is handed its own `Rect` at draw time and so knows
     /// its true size already. `App::update` runs nowhere near a frame and
     /// has no other way to find out — which is why the two places that
-    /// need geometry (`chrome`, `preview_pane`) hand-count it from these
-    /// numbers, and why both are pinned against a real render.
+    /// need geometry use the same layout functions as rendering.
     Resize {
         width: u16,
         height: u16,
     },
     Quit,
+}
+
+/// Non-blocking, bounded transport for subprocess output.
+///
+/// Logs are the only event class a child can produce without limit. They
+/// therefore get backpressure independently from lifecycle and completion
+/// events, which must never be dropped or a busy state could become stuck.
+#[derive(Clone)]
+pub struct LogSender {
+    tx: mpsc::Sender<String>,
+    dropped: Arc<AtomicUsize>,
+}
+
+pub struct LogReceiver {
+    rx: mpsc::Receiver<String>,
+    dropped: Arc<AtomicUsize>,
+}
+
+pub fn log_channel(capacity: usize) -> (LogSender, LogReceiver) {
+    let (tx, rx) = mpsc::channel(capacity);
+    let dropped = Arc::new(AtomicUsize::new(0));
+    (
+        LogSender {
+            tx,
+            dropped: dropped.clone(),
+        },
+        LogReceiver { rx, dropped },
+    )
+}
+
+impl LogSender {
+    /// Queues a line without ever slowing the child reading task. A full
+    /// channel counts the loss; the receiver turns the count into one
+    /// visible summary when it next gets CPU time.
+    pub fn send(&self, line: String) {
+        match self.tx.try_send(line) {
+            Ok(()) => {}
+            Err(mpsc::error::TrySendError::Full(_)) => {
+                self.dropped.fetch_add(1, Ordering::Relaxed);
+            }
+            // The application is exiting; nobody remains to inform.
+            Err(mpsc::error::TrySendError::Closed(_)) => {}
+        }
+    }
+}
+
+impl LogReceiver {
+    pub async fn recv(&mut self) -> Option<String> {
+        self.rx.recv().await
+    }
+
+    pub fn try_recv(&mut self) -> Result<String, mpsc::error::TryRecvError> {
+        self.rx.try_recv()
+    }
+
+    pub fn take_dropped(&self) -> usize {
+        self.dropped.swap(0, Ordering::Relaxed)
+    }
 }
 
 pub struct EventStream {
@@ -129,5 +192,25 @@ impl EventStream {
 impl Drop for EventStream {
     fn drop(&mut self) {
         self.running.store(false, Ordering::Relaxed);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn process_logs_are_bounded_and_report_the_overflow() {
+        let (tx, mut rx) = log_channel(2);
+
+        tx.send("one".into());
+        tx.send("two".into());
+        tx.send("three".into());
+        tx.send("four".into());
+
+        assert_eq!(rx.recv().await.as_deref(), Some("one"));
+        assert_eq!(rx.recv().await.as_deref(), Some("two"));
+        assert_eq!(rx.take_dropped(), 2);
+        assert_eq!(rx.take_dropped(), 0, "the summary is emitted only once");
     }
 }

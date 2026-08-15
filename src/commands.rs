@@ -61,9 +61,9 @@ pub struct Command {
     /// them; nothing in the UI shows it.
     #[cfg_attr(not(test), allow(dead_code))]
     pub handler: Handler,
-    /// Not listed: `launch!` is emitted by the confirmation prompt and
-    /// never typed, so putting it in front of the user would only invite
-    /// skipping a check that exists for a reason.
+    /// Not listed: `launch!` and `router!` are emitted by the confirmation
+    /// prompt and never typed, so putting them in front of the user would
+    /// only invite skipping a check that exists for a reason.
     pub hidden: bool,
     /// A form of the command the conformance test can safely drive against
     /// a config path that does not exist. Read by the tests only, hence
@@ -119,6 +119,17 @@ pub const ALL: &[Command] = &[
         Handler::Launcher,
         "router",
     ),
+    Command {
+        hidden: true,
+        ..command(
+            "router!",
+            "router! [--max N] [--idle S]",
+            "the same, skipping the port-in-use check — emitted by the prompt, not typed",
+            Group::Server,
+            Handler::Launcher,
+            "router!",
+        )
+    },
     command(
         "stop",
         "stop",
@@ -267,9 +278,9 @@ mod tests {
             );
         }
         assert_eq!(
-            visible().count() + 1,
+            visible().count() + 2,
             ALL.len(),
-            "exactly one command (launch!) is hidden"
+            "exactly two commands (launch!, router!) are hidden"
         );
     }
 }

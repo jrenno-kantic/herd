@@ -43,7 +43,9 @@
 ## Confirm
 
 Why the launcher is asking before it launches:
-`PortInUse(u16)` | `TooLarge { estimate, budget }` | `NotDownloaded { repo }`.
+`PortInUse { port, retry }` | `TooLarge { estimate, budget }` |
+`NotDownloaded { repo }`. `retry` is the force command a yes re-dispatches
+(`launch! …`, `router! …`), authored verbatim by the Executor that refused it.
 
 ## PendingDelete
 
@@ -236,7 +238,7 @@ and to build a launchable argv.
 ## UiEvent
 
 `Key` | `Tick` | `CommandFinished { command, output }` | `Log(String)` |
-`LlamaStatus(LlamaSnapshot)` | `PortInUse { port, model }` |
+`LlamaStatus(LlamaSnapshot)` | `PortInUse { port, name, retry }` |
 `ChatResult(Box<Result<ChatOutcome, String>>)` | `CacheList(Vec<CachedModel>)` |
 `DownloadProgress { model, done, total }` |
 `DownloadFinished { model, result }` | `Resize { width, height }` | `Quit`

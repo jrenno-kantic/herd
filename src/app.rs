@@ -16,6 +16,8 @@ use std::collections::{BTreeSet, VecDeque};
 use std::path::PathBuf;
 use std::time::Instant;
 
+mod screen_input;
+
 const MAX_LOGS: usize = 500;
 
 #[derive(Debug, Clone, Copy, Eq, PartialEq)]
@@ -371,8 +373,11 @@ pub struct ConfigChoice {
 /// than refusing or silently proceeding.
 #[derive(Debug, Clone, PartialEq)]
 pub enum Confirm {
-    /// Something herd did not start already holds the port.
-    PortInUse(u16),
+    /// Something herd did not start already holds the port. Carries the
+    /// force command a yes re-dispatches (`launch! …`, `router! …`),
+    /// authored by the Executor that refused it — see
+    /// [`UiEvent::PortInUse`].
+    PortInUse { port: u16, retry: String },
     /// The preset is estimated to need more memory than the budget allows.
     /// Worth interrupting for: on a machine with no headroom this is the
     /// difference between a launch that fails and a swap storm that takes
@@ -1247,33 +1252,6 @@ fn effective(config: &LlamaConfig, model: &str, keys: &[&str]) -> Option<String>
     None
 }
 
-/// Rows a page key jumps. A constant rather than the viewport height
-/// because `App::update` is pure and never learns how tall the terminal
-/// is — and a fixed, predictable jump is easier to aim than one that
-/// changes with the window.
-/// Where a movement key takes a cursor over `len` rows, or `None` if the
-/// key is not a movement key and the caller should go on matching it.
-///
-/// Shared by the Models table, the Settings rows and the config picker, so
-/// the three cannot drift apart and every list answers to the same keys.
-/// The picker used to hand-roll its own `j`/`k` pair and so quietly lacked
-/// page, home and end.
-fn moved(cursor: usize, len: usize, key: KeyCode, page: usize) -> Option<usize> {
-    let last = len.checked_sub(1)?;
-
-    let next = match key {
-        KeyCode::Down | KeyCode::Char('j') => cursor.saturating_add(1).min(last),
-        KeyCode::Up | KeyCode::Char('k') => cursor.saturating_sub(1),
-        KeyCode::PageDown => cursor.saturating_add(page).min(last),
-        KeyCode::PageUp => cursor.saturating_sub(page),
-        KeyCode::Home | KeyCode::Char('g') => 0,
-        KeyCode::End | KeyCode::Char('G') => last,
-        _ => return None,
-    };
-
-    Some(next)
-}
-
 #[derive(Debug)]
 pub struct App {
     pub command_input: String,
@@ -1311,53 +1289,6 @@ fn is_on(value: &str) -> bool {
 /// so a page is sane even if the size never arrives.
 const DEFAULT_ROWS: u16 = 24;
 const DEFAULT_COLS: u16 = 80;
-
-/// The argv preview's pane, hand-counted from the layout the same way
-/// `chrome` is, and pinned against a real render by
-/// `the_preview_never_scrolls_past_what_the_pane_hides`.
-///
-/// `App::update` has to know it because scrolling is clamped there — the
-/// alternative is a counter that keeps climbing while the view stands
-/// still, so that pressing the other key does nothing for twenty presses.
-mod preview_pane {
-    /// Sidebar (24) and the pane's own borders (2).
-    pub const CHROME_COLS: u16 = 26;
-    /// `Constraint::Length(8)` less the top and bottom borders.
-    pub const ROWS: usize = 6;
-}
-
-/// Rows a screen spends on things that are not list entries: the command
-/// bar and status line, the block borders, and whatever the screen puts
-/// above or below its list. Subtracted from the terminal height to get the
-/// number of rows a page key should move by.
-///
-/// Paging by more than fits on screen skips content silently, which is the
-/// one outcome worth designing against — so where a number is uncertain it
-/// errs on the high side and pages slightly short instead.
-fn chrome(screen: Screen) -> u16 {
-    match screen {
-        // command bar (3) + status (1) + argv preview (8) + borders (2)
-        // + column header (1) + two footer lines (2)
-        Screen::Models => 17,
-        // command bar (3) + status (1) + borders (2) + footer (1), plus 6
-        // for the section headers. The Settings cursor counts *entries*,
-        // but a header is drawn as a blank line and a title — two rows
-        // that no entry index accounts for. There are at most three
-        // ([server], [*], the preset), so reserving their six rows keeps a
-        // page inside the screen whatever the sections contain.
-        Screen::Settings => 7 + 6,
-        // command bar (3) + status (1) + borders (2) + position footer (1)
-        Screen::Logs => 7,
-        // command bar (3) + status (1) + borders (2) + column header (1)
-        // + summary and footer lines (2)
-        Screen::Hub => 9,
-        // Two rows to move between, so paging is irrelevant, but the
-        // value still has to be sane.
-        Screen::Router => 12,
-        // No list to page through; the value is unused but must be sane.
-        Screen::Server | Screen::Test | Screen::Stats => 12,
-    }
-}
 
 impl App {
     /// Resolves the `models.ini` path itself (env / RAM tier / legacy).
@@ -1415,13 +1346,10 @@ impl App {
     /// presses to cross one screen; on a short one it jumped past rows the
     /// user never saw.
     pub fn page(&self) -> usize {
-        const OVERLAP: u16 = 1;
-        const MIN_PAGE: u16 = 3;
-
-        self.rows
-            .saturating_sub(chrome(self.screen))
-            .saturating_sub(OVERLAP)
-            .max(MIN_PAGE) as usize
+        crate::layout::page_rows(
+            self.screen,
+            ratatui::layout::Rect::new(0, 0, self.cols, self.rows),
+        )
     }
 
     /// The argv the preview is showing on the current screen, wrapped to
@@ -1434,7 +1362,8 @@ impl App {
             _ => return None,
         };
 
-        let width = self.cols.saturating_sub(preview_pane::CHROME_COLS) as usize;
+        let terminal = ratatui::layout::Rect::new(0, 0, self.cols, self.rows);
+        let (width, _) = crate::layout::preview_viewport(self.screen, terminal)?;
         Some(crate::components::wrap_argv(&argv, width).len())
     }
 
@@ -1442,9 +1371,11 @@ impl App {
     /// screen. Zero when it all fits, which is what stops the keys from
     /// advertising motion that never happens.
     pub fn preview_max_scroll(&self) -> usize {
-        self.preview_lines()
-            .unwrap_or(0)
-            .saturating_sub(preview_pane::ROWS)
+        let terminal = ratatui::layout::Rect::new(0, 0, self.cols, self.rows);
+        let visible = crate::layout::preview_viewport(self.screen, terminal)
+            .map(|(_, height)| height)
+            .unwrap_or(0);
+        self.preview_lines().unwrap_or(0).saturating_sub(visible)
     }
 
     fn clamp_preview_scroll(&mut self) {
@@ -1504,8 +1435,8 @@ impl App {
                 self.apply_status(snapshot);
                 Action::None
             }
-            UiEvent::PortInUse { port, model } => {
-                self.ask(model, Confirm::PortInUse(port));
+            UiEvent::PortInUse { port, name, retry } => {
+                self.ask(name, Confirm::PortInUse { port, retry });
                 self.push_log(format!(
                     "port {port} is already in use by a process herd did not start"
                 ));
@@ -1694,16 +1625,7 @@ impl App {
                 self.screen = Screen::ALL[index];
                 Action::None
             }
-            _ => match self.screen {
-                Screen::Models => self.handle_models_key(key),
-                Screen::Hub => self.handle_hub_key(key),
-                Screen::Server => self.handle_server_key(key),
-                Screen::Router => self.handle_router_key(key),
-                Screen::Test => self.handle_test_key(key),
-                Screen::Stats => self.handle_stats_key(key),
-                Screen::Settings => self.handle_settings_key(key),
-                Screen::Logs => self.handle_logs_key(key),
-            },
+            _ => screen_input::dispatch(self, key),
         }
     }
 
@@ -1715,7 +1637,7 @@ impl App {
     }
 
     fn handle_models_key(&mut self, key: KeyEvent) -> Action {
-        if let Some(cursor) = moved(
+        if let Some(cursor) = screen_input::moved(
             self.llama.cursor,
             self.llama.rows().len(),
             key.code,
@@ -1763,7 +1685,7 @@ impl App {
     /// accident happens. Capitals are already the force variants here
     /// (`Q`, `X`), so the shift key carries its usual meaning.
     fn handle_hub_key(&mut self, key: KeyEvent) -> Action {
-        if let Some(cursor) = moved(
+        if let Some(cursor) = screen_input::moved(
             self.llama.hub_cursor,
             self.llama.hub_rows().len(),
             key.code,
@@ -1929,7 +1851,7 @@ impl App {
     /// memory reservation: both are single numbers with a sensible range,
     /// and typing one is more keystrokes than nudging it.
     fn handle_router_key(&mut self, key: KeyEvent) -> Action {
-        if let Some(cursor) = moved(
+        if let Some(cursor) = screen_input::moved(
             self.llama.router_cursor,
             self.llama.router_rows().len(),
             key.code,
@@ -2158,7 +2080,7 @@ impl App {
             return Action::None;
         }
 
-        if let Some(cursor) = moved(
+        if let Some(cursor) = screen_input::moved(
             self.llama.picker_cursor,
             choices.len(),
             key.code,
@@ -2223,7 +2145,7 @@ impl App {
     }
 
     fn handle_settings_key(&mut self, key: KeyEvent) -> Action {
-        if let Some(cursor) = moved(
+        if let Some(cursor) = screen_input::moved(
             self.llama.settings_cursor,
             self.llama.setting_entry_indices().len(),
             key.code,
@@ -2471,11 +2393,13 @@ impl App {
         let confirmed = matches!(key.code, KeyCode::Char('y') | KeyCode::Char('Y'));
 
         match (confirmed, model, reason) {
-            // `launch!` skips the port check, which is exactly and only
-            // what the user answered here.
-            (true, Some(model), Some(Confirm::PortInUse(_))) => {
-                self.run(format!("launch! {model}"))
-            }
+            // The force variant skips the port check, which is exactly and
+            // only what the user answered here. It comes back verbatim
+            // from the Executor that refused it (`launch! …`, `router! …`)
+            // rather than being rebuilt out of the display name, so a
+            // launch with extra args or a router with its numbers retries
+            // as exactly what was refused.
+            (true, _, Some(Confirm::PortInUse { retry, .. })) => self.run(retry),
             // Fetch it, then launch it: the user asked for the model, not
             // for a download.
             (true, Some(model), Some(Confirm::NotDownloaded { repo })) => {
@@ -2969,19 +2893,13 @@ alias = qwen3-coder
         assert!(app.page() >= 3, "page collapsed to {}", app.page());
     }
 
-    /// Every screen sits under the same command bar, status line and
-    /// block borders, so none of them can honestly claim less chrome than
-    /// that — a screen that did would page past its own last visible row.
+    /// Paging is computed by the same constraints as rendering, and must
+    /// remain usable at ordinary and tiny terminal sizes.
     #[test]
-    fn no_screen_claims_less_chrome_than_the_shared_layout() {
-        const SHARED: u16 = 3 + 1 + 2; // command bar, status line, borders
-
+    fn every_screen_gets_a_sane_page_from_the_shared_layout() {
         for screen in Screen::ALL {
-            assert!(
-                chrome(screen) >= SHARED,
-                "{screen:?} claims {} rows of chrome, less than the shared {SHARED}",
-                chrome(screen)
-            );
+            let page = crate::layout::page_rows(screen, ratatui::layout::Rect::new(0, 0, 120, 40));
+            assert!(page >= 3, "{screen:?} collapsed to a {page}-row page");
         }
     }
 
@@ -5285,11 +5203,18 @@ hf-repo = unsloth/gemma-4-12B-it-qat-GGUF:UD-Q4_K_XL
         let mut app = app_with_sample();
         app.update(UiEvent::PortInUse {
             port: 1234,
-            model: "gemma4-12b".into(),
+            name: "gemma4-12b".into(),
+            retry: "launch! gemma4-12b".into(),
         });
 
         assert_eq!(app.mode, Mode::ConfirmLaunch);
-        assert_eq!(app.llama.confirm, Some(Confirm::PortInUse(1234)));
+        assert_eq!(
+            app.llama.confirm,
+            Some(Confirm::PortInUse {
+                port: 1234,
+                retry: "launch! gemma4-12b".into()
+            })
+        );
 
         match app.update(ch('y')) {
             Action::RunCommand(command) => assert_eq!(command, "launch! gemma4-12b"),
@@ -5298,12 +5223,33 @@ hf-repo = unsloth/gemma-4-12B-it-qat-GGUF:UD-Q4_K_XL
         assert_eq!(app.mode, Mode::Browse);
     }
 
+    /// The router's version of the same question. The retry command comes
+    /// back verbatim — numbers included — rather than being rebuilt from
+    /// the prompt's display name, which for the router is not a preset.
+    #[test]
+    fn a_router_port_conflict_retries_the_router_verbatim() {
+        let mut app = app_with_sample();
+        app.update(UiEvent::PortInUse {
+            port: 1234,
+            name: "router".into(),
+            retry: "router! --max 3 --idle 120".into(),
+        });
+
+        assert_eq!(app.mode, Mode::ConfirmLaunch);
+
+        match app.update(ch('y')) {
+            Action::RunCommand(command) => assert_eq!(command, "router! --max 3 --idle 120"),
+            other => panic!("expected RunCommand, got {other:?}"),
+        }
+    }
+
     #[test]
     fn declining_a_port_conflict_launches_nothing() {
         let mut app = app_with_sample();
         app.update(UiEvent::PortInUse {
             port: 1234,
-            model: "gemma4-12b".into(),
+            name: "gemma4-12b".into(),
+            retry: "launch! gemma4-12b".into(),
         });
 
         assert!(matches!(app.update(ch('n')), Action::None));

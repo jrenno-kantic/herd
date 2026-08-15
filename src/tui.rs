@@ -896,7 +896,10 @@ spec-type = draft-mtp
     fn the_port_conflict_modal_is_drawn_over_the_screen() {
         let mut app = sample_app();
         app.mode = Mode::ConfirmLaunch;
-        app.llama.confirm = Some(crate::app::Confirm::PortInUse(1234));
+        app.llama.confirm = Some(crate::app::Confirm::PortInUse {
+            port: 1234,
+            retry: "launch! gemma4-12b".into(),
+        });
         app.llama.pending_launch = Some("gemma4-12b".into());
 
         let text = frame_text(&app, 120, 40);
@@ -1030,7 +1033,10 @@ spec-type = draft-mtp
             let _ = frame_text(&app, 20, 6);
         }
 
-        app.llama.confirm = Some(crate::app::Confirm::PortInUse(1234));
+        app.llama.confirm = Some(crate::app::Confirm::PortInUse {
+            port: 1234,
+            retry: "launch! gemma4-12b".into(),
+        });
         app.llama.pending_delete = Some(crate::app::PendingDelete {
             reference: "vendor/Model-GGUF:Q4_K_M".into(),
             repo: "vendor/Model-GGUF".into(),

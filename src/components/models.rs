@@ -3,7 +3,7 @@
 
 use crate::{
     app::{App, Mode, Screen},
-    components, keys,
+    components, keys, layout,
     services::llama::{caps, hub::Availability, Fit, ServerState},
     theme::Theme,
 };
@@ -13,19 +13,16 @@ use ratatui::widgets::{Block, Borders, Gauge, List, ListItem, ListState, Paragra
 use ratatui::Frame;
 
 pub fn render(frame: &mut Frame, app: &App, area: Rect) {
-    let chunks = Layout::default()
-        .direction(Direction::Vertical)
-        .constraints([Constraint::Min(3), Constraint::Length(8)])
-        .split(area);
+    let chunks = layout::with_preview(area);
 
-    table(frame, app, chunks[0]);
+    table(frame, app, chunks.first);
 
     // The download takes over the argv preview's pane while it runs: the
     // argv is not what anyone is watching at that moment, and a bar that
     // has to share the space with eight lines of flags is not a bar.
     match &app.llama.download {
-        Some(download) => download_bar(frame, download, chunks[1]),
-        None => preview(frame, app, chunks[1]),
+        Some(download) => download_bar(frame, download, chunks.second),
+        None => preview(frame, app, chunks.second),
     }
 }
 
@@ -99,31 +96,19 @@ fn table(frame: &mut Frame, app: &App, area: Rect) {
         return;
     }
 
-    let chunks = Layout::default()
-        .direction(Direction::Vertical)
-        .constraints([
-            Constraint::Length(1),
-            Constraint::Min(1),
-            // Two: what the highlighted preset *is*, then what the keys
-            // do. Sharing one line meant the description pushed the key
-            // hints off the right edge — and the description is the half
-            // that grows, since it now spells out optimisations and
-            // capabilities.
-            Constraint::Length(2),
-        ])
-        .split(inner)
-        .to_vec();
+    // Two footer rows: what the preset is, then what the keys do.
+    let chunks = layout::list(inner, 1, 2);
 
     // Chosen from the width actually available, not assumed: the fixed
     // layout this replaces was already 89 columns wide, so on a
     // 100-column terminal — 74 for this pane once the sidebar and borders
     // are taken — the last columns were being clipped off the right edge
     // with nothing to say they existed.
-    let columns = Columns::for_width(chunks[0].width as usize);
+    let columns = Columns::for_width(chunks.header.width as usize);
 
     frame.render_widget(
         Paragraph::new(Line::styled(columns.header(), Theme::border())),
-        chunks[0],
+        chunks.header,
     );
     frame.render_widget(
         Paragraph::new(vec![
@@ -133,13 +118,13 @@ fn table(frame: &mut Frame, app: &App, area: Rect) {
                     "  {}",
                     keys::screen_hint_within(
                         Screen::Models,
-                        components::hint_width(chunks[2].width, false, 0)
+                        components::hint_width(chunks.footer.width, false, 0)
                     )
                 ),
                 Theme::logs(),
             ),
         ]),
-        chunks[2],
+        chunks.footer,
     );
 
     let rows = app.llama.rows();
@@ -150,7 +135,7 @@ fn table(frame: &mut Frame, app: &App, area: Rect) {
         } else {
             format!("no preset matches '{}'", app.llama.filter)
         };
-        frame.render_widget(Paragraph::new(message).style(Theme::logs()), chunks[1]);
+        frame.render_widget(Paragraph::new(message).style(Theme::logs()), chunks.rows);
         return;
     }
 
@@ -229,7 +214,7 @@ fn table(frame: &mut Frame, app: &App, area: Rect) {
     // Built fresh each frame, so the offset is recomputed from the cursor
     // and `render` stays a pure function of `App` — no draw-time mutation.
     let mut state = ListState::default().with_selected(Some(app.llama.cursor.min(rows.len() - 1)));
-    frame.render_stateful_widget(List::new(items), chunks[1], &mut state);
+    frame.render_stateful_widget(List::new(items), chunks.rows, &mut state);
 
     // Drawn beside the rows rather than down the whole pane, so the thumb
     // spans the list and not the column header and footer around it. The
@@ -237,7 +222,7 @@ fn table(frame: &mut Frame, app: &App, area: Rect) {
     // how much list is above and below it while a page key is held.
     components::list_scrollbar(
         frame,
-        chunks[1],
+        chunks.rows,
         area.x + area.width.saturating_sub(1),
         rows.len(),
         app.llama.cursor,
