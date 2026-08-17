@@ -12,6 +12,8 @@
   for `stop`, which is the one command needed when something else is wedged
 - `rows: u16`, `cols: u16` - last terminal size, from `UiEvent::Resize`; drive
   `page()` and the argv preview's scroll bound
+- `system: SystemInfo` - architecture, optional GPU name, and latest available
+  memory sample for the sidebar
 - `llama: LauncherState`
 
 ## LauncherState
@@ -228,7 +230,7 @@ machine you are on right now, not a preset setting.
 ## Shipped preset data (`data/`)
 
 An in-repo snapshot of the user's `~/models/` tiers: `16gb/models.ini`
-(13 presets) and `32gb/models.ini` (8 presets), plus the original
+(13 presets) and `32gb/models.ini` (9 presets), plus the original
 `llama-launch.js`, `test_call.sh` and `start-router.sh`.
 
 Reference and **test fixture only** - config resolution reads `~/models/`, never
@@ -241,7 +243,8 @@ and to build a launchable argv.
 `LlamaStatus(LlamaSnapshot)` | `PortInUse { port, name, retry }` |
 `ChatResult(Box<Result<ChatOutcome, String>>)` | `CacheList(Vec<CachedModel>)` |
 `DownloadProgress { model, done, total }` |
-`DownloadFinished { model, result }` | `Resize { width, height }` | `Quit`
+`DownloadFinished { model, result }` | `Resize { width, height }` |
+`SystemInfo(SystemInfo)` | `AvailableMemory(Option<f64>)` | `Quit`
 
 ## Action
 

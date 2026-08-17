@@ -1,6 +1,6 @@
 # Roadmap
 
-Status as of 2026-08-13 (herd 0.8.0).
+Status as of 2026-08-17 (herd 0.8.2).
 
 ## Delivered
 
@@ -25,8 +25,13 @@ Status as of 2026-08-13 (herd 0.8.0).
   byte-accurate progress bar
 - `OPT` and `CAPS` columns, and a table that sizes itself to the terminal rather
   than clipping off the right edge
-- Graceful exit: `q` names what would be abandoned and asks, `Q` forces, and
-  shutdown stops the downloader as well as the server — every step bounded
+- The Models `REPO` column consumes every spare cell while fixed columns remain
+  visible
+- Graceful exit: `q` confirms while a manual or router process is live, naming
+  its serving state and anything else that would be abandoned; idle exits
+  directly, `Q` forces, and shutdown remains bounded
+- Sidebar machine telemetry: architecture, GPU, installed RAM and available
+  memory, refreshed around llama lifecycle changes
 - Build stamping (`herd --version`, commit + date) and `make release`
 - Viewport-aware paging, arrow navigation between screens, list position
   indicators, a logs scrollbar, and booleans that toggle on Enter
@@ -66,7 +71,8 @@ Status as of 2026-08-13 (herd 0.8.0).
 
 ## Next
 
-Tracked in `doc/PROMPT_NEXT_STEPS.md` (French). Highlights: auto-restart on
+`TODO.md` currently has no outstanding tasks. Longer-term candidates remain in
+`doc/PROMPT_NEXT_STEPS.md` (French): auto-restart on
 crash, a full end-to-end test against a real `llama-server` (spawn, model load,
 kill), flagging presets duplicated across tiers, reading vision support from the
 repo listing rather than the model name, a `QUANT` column, and sizing a preset

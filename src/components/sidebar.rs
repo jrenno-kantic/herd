@@ -5,6 +5,8 @@ use crate::{
 use ratatui::text::Line;
 use ratatui::widgets::{Block, Borders, Paragraph};
 
+const VALUE_WIDTH: usize = 15;
+
 pub fn view(app: &App) -> Paragraph<'static> {
     let mut lines: Vec<Line> = Screen::ALL
         .iter()
@@ -30,6 +32,27 @@ pub fn view(app: &App) -> Paragraph<'static> {
     lines.push(Line::from(""));
     lines.push(Line::styled(
         format!(" tier  {}", app.llama.tier_name().unwrap_or("-")),
+        Theme::logs(),
+    ));
+    lines.push(Line::styled(
+        format!(" arch  {}", app.system.architecture),
+        Theme::logs(),
+    ));
+    lines.push(Line::styled(
+        format!(
+            " GPU   {}",
+            crate::components::truncate(app.system.gpu.as_deref().unwrap_or("?"), VALUE_WIDTH)
+        ),
+        Theme::logs(),
+    ));
+    lines.push(Line::styled(
+        format!(
+            " free  {}",
+            app.system
+                .available_memory_gib
+                .map(|gib| format!("{gib:.1} GiB"))
+                .unwrap_or_else(|| "?".into())
+        ),
         Theme::logs(),
     ));
     lines.push(Line::styled(

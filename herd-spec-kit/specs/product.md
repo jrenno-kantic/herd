@@ -20,6 +20,8 @@ record of what a project used to be belongs.
   speculative-decoding mode, optimisations, capabilities and estimated memory
   footprint
 - Know before launching whether a preset fits this machine, in red when it does not
+- See the Mac architecture, GPU, installed RAM, and current available memory in
+  the sidebar while models load and unload
 - Choose between the `models.ini` files present on the machine, each annotated
   with how many of its presets exceed the memory budget
 - Know which presets are actually downloaded, and fetch the ones that are not —
@@ -41,7 +43,9 @@ record of what a project used to be belongs.
 - Read the process output while it runs, scrollable, with a position indicator
 - Ask what can be typed, what a key does, and which build this is, without
   leaving the screen
-- Quit without losing work in flight, and without leaving a server running
+- Confirm normal quit while a manual model or router process is live, naming
+  the serving mode/model and any other work that would be lost; exit directly
+  when no supervised server remains
 
 ## Design Principles
 

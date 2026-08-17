@@ -1,4 +1,7 @@
-use crate::services::llama::{api::ChatOutcome, hub::CachedModel, LlamaSnapshot};
+use crate::services::{
+    llama::{api::ChatOutcome, hub::CachedModel, LlamaSnapshot},
+    system::SystemInfo,
+};
 use crossterm::event::{self, Event, KeyEvent, KeyEventKind};
 use std::sync::{
     atomic::{AtomicBool, AtomicUsize, Ordering},
@@ -68,6 +71,10 @@ pub enum UiEvent {
         width: u16,
         height: u16,
     },
+    /// Stable hardware details discovered off the UI thread.
+    SystemInfo(SystemInfo),
+    /// A cheap memory-only refresh taken around model lifecycle changes.
+    AvailableMemory(Option<f64>),
     Quit,
 }
 

@@ -83,7 +83,12 @@ async fn main() -> Result<()> {
     let (log_tx, mut log_rx) = event::log_channel(LOG_CHANNEL_CAPACITY);
 
     let _events = EventStream::start(event_tx.clone());
-    let executor = Executor::with_log_sender(event_tx, config_path, log_tx);
+    let executor = Executor::with_log_sender(event_tx.clone(), config_path, log_tx);
+
+    // Hardware discovery includes `system_profiler` on macOS, so keep it off
+    // the UI thread. The sidebar starts with the compile-time architecture
+    // and fills in GPU and available memory as soon as this arrives.
+    spawn_system_detection(event_tx.clone());
 
     // Crossterm only reports a resize when one happens, so the starting
     // size has to be asked for. Without it the page keys would move by the
@@ -120,6 +125,9 @@ async fn main() -> Result<()> {
         // keeps a firehose from starving the render altogether — the loop
         // simply comes straight back for the rest.
         let mut idle = matches!(event, event::UiEvent::Tick);
+        if matches!(event, event::UiEvent::LlamaStatus(_)) {
+            spawn_memory_refresh(event_tx.clone());
+        }
         let mut actions = vec![app.update(event)];
         for _ in 0..DRAIN_LIMIT {
             let event = event_rx
@@ -128,6 +136,9 @@ async fn main() -> Result<()> {
                 .or_else(|| log_rx.try_recv().ok().map(event::UiEvent::Log));
             let Some(event) = event else { break };
             idle &= matches!(event, event::UiEvent::Tick);
+            if matches!(event, event::UiEvent::LlamaStatus(_)) {
+                spawn_memory_refresh(event_tx.clone());
+            }
             actions.push(app.update(event));
         }
 
@@ -197,6 +208,22 @@ async fn main() -> Result<()> {
     }
 
     Ok(())
+}
+
+fn spawn_system_detection(tx: mpsc::UnboundedSender<event::UiEvent>) {
+    tokio::task::spawn_blocking(move || {
+        let _ = tx.send(event::UiEvent::SystemInfo(
+            services::system::SystemInfo::detect(),
+        ));
+    });
+}
+
+fn spawn_memory_refresh(tx: mpsc::UnboundedSender<event::UiEvent>) {
+    tokio::task::spawn_blocking(move || {
+        let _ = tx.send(event::UiEvent::AvailableMemory(
+            services::system::available_memory_gib(),
+        ));
+    });
 }
 
 /// Outcome of parsing the (deliberately tiny) CLI surface. An explicit

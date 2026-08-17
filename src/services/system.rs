@@ -7,6 +7,145 @@ const SHELL_TIMEOUT: Duration = Duration::from_secs(30);
 const TERM_GRACE: Duration = Duration::from_millis(500);
 const KILL_GRACE: Duration = Duration::from_secs(2);
 
+/// The small set of machine facts useful while choosing and loading a model.
+///
+/// Architecture and GPU are stable for the life of the process. Available
+/// memory is deliberately separate so callers can refresh it around model
+/// lifecycle transitions without rerunning the slower GPU probe.
+#[derive(Debug, Clone, PartialEq)]
+pub struct SystemInfo {
+    pub architecture: String,
+    pub gpu: Option<String>,
+    pub available_memory_gib: Option<f64>,
+}
+
+impl Default for SystemInfo {
+    fn default() -> Self {
+        Self {
+            architecture: architecture_label().to_string(),
+            gpu: None,
+            available_memory_gib: None,
+        }
+    }
+}
+
+impl SystemInfo {
+    /// Detects the stable hardware fields and takes the first memory sample.
+    /// Called on a blocking worker because `system_profiler` can take a moment.
+    pub fn detect() -> Self {
+        Self {
+            architecture: architecture_label().to_string(),
+            gpu: gpu_name(),
+            available_memory_gib: available_memory_gib(),
+        }
+    }
+}
+
+fn architecture_label() -> &'static str {
+    #[cfg(target_arch = "aarch64")]
+    {
+        "ARM"
+    }
+    #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
+    {
+        "Intel"
+    }
+    #[cfg(not(any(target_arch = "aarch64", target_arch = "x86", target_arch = "x86_64")))]
+    {
+        std::env::consts::ARCH
+    }
+}
+
+#[cfg(target_os = "macos")]
+fn gpu_name() -> Option<String> {
+    let output = std::process::Command::new("system_profiler")
+        .args(["SPDisplaysDataType", "-detailLevel", "mini"])
+        .output()
+        .ok()?;
+    if !output.status.success() {
+        return None;
+    }
+    parse_gpu_names(&String::from_utf8_lossy(&output.stdout))
+}
+
+#[cfg(not(target_os = "macos"))]
+fn gpu_name() -> Option<String> {
+    None
+}
+
+#[cfg(target_os = "macos")]
+fn parse_gpu_names(text: &str) -> Option<String> {
+    let mut names = Vec::new();
+    for name in text.lines().filter_map(|line| {
+        line.trim()
+            .strip_prefix("Chipset Model:")
+            .map(str::trim)
+            .filter(|name| !name.is_empty())
+    }) {
+        if !names.contains(&name) {
+            names.push(name);
+        }
+    }
+    (!names.is_empty()).then(|| names.join(", "))
+}
+
+/// Memory macOS can reclaim for a model: free, inactive, speculative and
+/// purgeable pages. Reporting only `Pages free` would make a healthy machine
+/// with a warm file cache look full.
+#[cfg(target_os = "macos")]
+pub fn available_memory_gib() -> Option<f64> {
+    let output = std::process::Command::new("vm_stat").output().ok()?;
+    if !output.status.success() {
+        return None;
+    }
+    parse_vm_stat_available(&String::from_utf8_lossy(&output.stdout))
+}
+
+#[cfg(target_os = "macos")]
+fn parse_vm_stat_available(text: &str) -> Option<f64> {
+    let page_size: u64 = text
+        .lines()
+        .next()?
+        .split("page size of ")
+        .nth(1)?
+        .split_whitespace()
+        .next()?
+        .parse()
+        .ok()?;
+    let pages: u64 = text
+        .lines()
+        .filter_map(|line| {
+            let (label, value) = line.split_once(':')?;
+            matches!(
+                label.trim(),
+                "Pages free" | "Pages inactive" | "Pages speculative" | "Pages purgeable"
+            )
+            .then(|| value.trim().trim_end_matches('.').parse::<u64>().ok())
+            .flatten()
+        })
+        .sum();
+    Some(pages as f64 * page_size as f64 / 1024_f64.powi(3))
+}
+
+#[cfg(target_os = "linux")]
+pub fn available_memory_gib() -> Option<f64> {
+    let meminfo = std::fs::read_to_string("/proc/meminfo").ok()?;
+    let kib: u64 = meminfo
+        .lines()
+        .find_map(|line| line.strip_prefix("MemAvailable:"))?
+        .trim()
+        .strip_suffix("kB")?
+        .trim()
+        .parse()
+        .ok()?;
+    Some(kib as f64 / 1024_f64.powi(2))
+}
+
+#[cfg(not(any(target_os = "macos", target_os = "linux")))]
+pub fn available_memory_gib() -> Option<f64> {
+    None
+}
+
 pub async fn run_shell(command: &str) -> String {
     run_shell_with_timeout(command, SHELL_TIMEOUT).await
 }
@@ -131,6 +270,38 @@ fn group_exists(pid: u32) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn architecture_is_a_human_label() {
+        assert!(!architecture_label().is_empty());
+        assert!(!architecture_label().contains('_'));
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn system_profiler_gpu_names_are_deduplicated() {
+        let text = "\
+Graphics/Displays:\n\n\
+    Apple M4 Pro:\n\n\
+      Chipset Model: Apple M4 Pro\n\
+      Chipset Model: Apple M4 Pro\n";
+        assert_eq!(parse_gpu_names(text).as_deref(), Some("Apple M4 Pro"));
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn available_memory_includes_reclaimable_pages() {
+        let text = "\
+Mach Virtual Memory Statistics: (page size of 16384 bytes)\n\
+Pages free:                               1000.\n\
+Pages active:                             9000.\n\
+Pages inactive:                           2000.\n\
+Pages speculative:                         500.\n\
+Pages purgeable:                           500.\n";
+        let gib = parse_vm_stat_available(text).expect("valid vm_stat");
+        let expected = 4_000_f64 * 16_384.0 / 1024_f64.powi(3);
+        assert!((gib - expected).abs() < f64::EPSILON);
+    }
 
     #[tokio::test]
     async fn successful_output_is_trimmed() {

@@ -834,6 +834,7 @@ no-mmproj = true
                 "gemma4-26b",
                 "gemma4-31b",
                 "qwen36-27b",
+                "qwen38-27b",
                 "qwen36-35b",
                 "qwen3-coder",
                 "qwen3-vl-8b-instruct",

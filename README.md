@@ -22,8 +22,12 @@ probe. **Hub sits last** because it is where you go occasionally, to see what
 the cache is holding; menu order follows how often a screen is wanted, not how
 closely it relates to its neighbour.
 
+The sidebar also shows the machine architecture, detected GPU, installed RAM,
+and currently available memory. GPU discovery runs in the background; available
+memory is sampled again whenever llama-server starts, loads, stops, or exits.
+
 ```
-┌HERD 0.8.0────────────┐┌ Models · 32gb · ~/models/32gb/models.ini ────────────────────── 1/8 ┐
+┌HERD 0.8.2────────────┐┌ Models · 32gb · ~/models/32gb/models.ini ────────────────────── 1/8 ┐
 │ ▸ 1 Models           ││   NAME            REPO              RAM     OPT CAPS SPEC   LOCAL   │
 │   2 Server           ││▸★●gemma4-12b      unsloth/gemma-4…  7.3G  qat ud    S  mtp         █│
 │   3 Router           ││  ★gemma4-31b      unsloth/gemma-4…~18.3G  qat ud    S  mtp not local│
@@ -32,7 +36,7 @@ closely it relates to its neighbour.
 │   6 Settings         ││  RAM 36 GiB · quantisation-aware training · speculative (mtp)       │
 │   7 Logs             ││  j/↓ move · enter launch · s stop · d download · / filter · …       │
 │   8 Hub              │└─────────────────────────────────────────────────────────────────────┘
-│ tier  32gb           │┌ argv preview ───────────────────────────────── J/K scroll · y copy ┐
+│ tier  32gb           │┌ argv preview ────────────────────────────────── J/K scroll · y copy ┐
 │ RAM   36 GiB         ││llama-server \                                                       │
 │                      ││  --host 0.0.0.0 --port 1234 --jinja --ctx-size 32768 \              │
 │                      ││  --gpu-layers 99 --hf-repo unsloth/gemma-4-12B-it-qat-GGUF…         │
@@ -44,7 +48,9 @@ The table **sizes itself to the terminal**. On a narrow one the least
 load-bearing columns are dropped in order — context size, then optimisations,
 then capabilities, then the speculative head — rather than being clipped off the
 right edge where you cannot tell an empty column from a cut-off one. The preset
-name and `LOCAL` are never dropped.
+name and `LOCAL` are never dropped. Every spare column goes to `REPO`, with no
+maximum width, so widening the terminal progressively reveals the full
+repository reference.
 
 A **scrollbar** appears on the right border when there are more presets than
 rows on screen, and only then: a full-height thumb beside a list that fits would
@@ -90,8 +96,35 @@ appears once the clipboard has actually taken it; if no clipboard tool answered
 cargo run
 cargo run -- --config ~/models/16gb/models.ini   # pick a specific preset file
 cargo run -- --help
-cargo run -- --version                           # herd 0.8.0 (a1b2c3d 2026-08-13)
+cargo run -- --version                           # herd 0.8.2 (a1b2c3d 2026-08-17)
 ```
+
+### Running a downloaded macOS binary
+
+Only run a binary whose source and download you trust. A local ad-hoc signature
+seals that exact executable, but it does **not** identify its developer, notarize
+it, or make it pass Gatekeeper automatically. Apple describes `-` as the
+pseudo-identity for an [ad-hoc signature](https://developer.apple.com/documentation/security/seccodesignatureflags/adhoc).
+
+From Terminal, make the downloaded binary executable, sign it locally, verify
+the signature, and run it:
+
+```bash
+cd ~/Downloads
+chmod +x herd
+codesign --force --sign - ./herd
+codesign --verify --verbose=2 ./herd
+./herd
+```
+
+For a one-time graphical approval, find `herd` in Finder, right-click (or
+Control-click) it, choose **Open**, then confirm **Open**. A command-line binary
+may open a short-lived Terminal window; after approval, run it from Terminal as
+shown above. If Finder does not offer that choice or macOS still blocks it,
+first try to open it, then go to **System Settings → Privacy & Security**, scroll
+to **Security**, choose **Open Anyway**, and confirm. Apple notes that this
+override should be used only when the file and its source are trusted; see
+[Apple's current Gatekeeper instructions](https://support.apple.com/guide/mac-help/mh40616/mac).
 
 `--version` reports the commit the binary was built from, with `-dirty` when it
 came from a tree with uncommitted changes. A version number alone cannot tell
@@ -103,10 +136,10 @@ behaves on this machine:
 ```
 ┌ About ─────────────────────────────────────────────────────────┐
 │                                                                │
-│  herd 0.8.0                                                    │
+│  herd 0.8.2                                                    │
 │  Terminal control plane for llama-server                       │
 │                                                                │
-│  build   cd7ed52-dirty · 2026-08-13                            │
+│  build   cd7ed52-dirty · 2026-08-17                            │
 │                uncommitted changes — not reproducible          │
 │                                                                │
 │  config  …enno/Documents/development/herd/data/32gb/models.ini │
@@ -136,7 +169,7 @@ Global:
 | `Tab` / `Shift-Tab`, or `→` / `←` | cycle screens |
 | `:` | command bar (power-user escape hatch) — `:help` lists what it accepts |
 | `?` | key reference |
-| `q` | quit — asks first if a download, probe or command is in flight |
+| `q` | quit; asks first while a manual model or router process is active |
 | `Q` | quit at once, abandoning it |
 
 Models screen:
@@ -470,7 +503,7 @@ count and how many of them exceed the current budget:
 │  budget 12.0 GiB usable of 16 GiB installed                        │
 │   16gb      13 presets                                             │
 │     ~/models/16gb/models.ini                                       │
-│ ▸• 32gb       8 presets  ⚠ 5 exceed this machine                   │
+│ ▸• 32gb       9 presets  ⚠ 5 exceed this machine                   │
 │     ~/models/32gb/models.ini                                       │
 │                                                                    │
 │  enter select · up/down move · esc cancel                          │
@@ -532,6 +565,8 @@ OFF ──launch──> STARTING ──/health 200──> SERVING ──stop─�
 **STARTING can legitimately last a while.** A preset whose GGUF is not cached yet downloads it first, so the first launch of a 30B model is minutes, not seconds. Watch the Server screen or the Logs: llama-server reports download and load progress there. If nothing is serving after 10 minutes the state becomes `ERROR` rather than hanging forever.
 
 Quitting always stops the supervised process, so no orphaned server keeps holding GPU memory.
+Lowercase `q` opens a confirmation while a supervised server is live and exits
+directly otherwise; uppercase `Q` remains the explicit immediate-exit shortcut.
 
 ## Settings and overrides
 
@@ -644,8 +679,8 @@ data/
 ├── 16gb/models.ini      13 presets, 4B–27B: Qwen 3.5 4B/9B (±MTP), Gemma 4 E4B,
 │                        Qwen3 4B, Gemma 3 4B, Phi-4 Mini, Nemotron 3 Nano 4B,
 │                        Gemma 4 12B, Qwen3-VL 8B, Qwen3 14B, Bonsai 27B
-├── 32gb/models.ini       8 presets, 12B–35B: Gemma 4 12B/26B/31B, Qwen 3.6 27B/35B,
-│                        Qwen3 Coder 30B, Qwen3-VL 8B, Qwen3 14B
+├── 32gb/models.ini       9 presets, 12B–35B: Gemma 4 12B/26B/31B, Qwen 3.6 27B/35B,
+│                        Qwen 3.8 27B, Qwen3 Coder 30B, Qwen3-VL 8B, Qwen3 14B
 ├── scripts/llama-launch.js
 ├── scripts/test_call.sh
 └── start-router.sh
@@ -740,20 +775,20 @@ and can be deleted by hand; HERD does not touch files it did not write.
 `?` for keys:
 
 ```
-┌ Commands ─────────────────────────────────────────────────────────────────┐
-│  llama-server                                                             │
-│  :launch <model> [-- args]    launch a preset, hot-swapping whatever is …│
+┌ Commands ──────────────────────────────────────────────────────────────────┐
+│  llama-server                                                              │
+│  :launch <model> [-- args]    launch a preset, hot-swapping whatever is …  │
 │  :router [--max N] [--idle S] start llama-server's own multi-model router  │
 │  :stop                        stop the supervised process, even while …    │
 │  :status                      is the server reachable, and what has it …   │
 │  :ping <model>                send one chat completion and print the reply │
-│                                                                           │
-│  models.ini                                                               │
+│                                                                            │
+│  models.ini                                                                │
 │  :cache                       ask llama.cpp again what it has locally      │
-│  …                                                                        │
-│                                                                           │
-│  esc close · ? lists the keys instead                                     │
-└───────────────────────────────────────────────────────────────────────────┘
+│  …                                                                         │
+│                                                                            │
+│  esc close · ? lists the keys instead                                      │
+└────────────────────────────────────────────────────────────────────────────┘
 ```
 
 An overlay rather than a line printed into the log, which is what `:help` used
@@ -792,22 +827,29 @@ about the llama-server build actually installed.
 
 ## Quitting
 
-`q` quits outright when nothing is in flight. When something is, it names what
-would be abandoned and asks:
+`q` asks only while HERD supervises a live manual-model or router process,
+including its starting and stopping transitions. With no live server it exits
+directly. The dialog says what HERD is serving, then names any download, probe,
+or command that would also be abandoned. Manual mode names the exact model;
+router mode reports its configured resident limit because HERD does not receive
+an exact loaded-model count from llama-server.
 
 ```
-┌ Work in progress ────────────────────────────────────────────────┐
-│  Quitting now would abandon:                                     │
+┌ Confirm quit ────────────────────────────────────────────────────┐
+│  Quit HERD?                                                      │
+│  Model 'gemma4-31b' is currently being served.                   │
+│                                                                  │
+│  Quitting now would also abandon:                                │
 │    · downloading gemma4-31b (2.1G of 6.7G · 31%)                 │
 │                                                                  │
-│  The server is stopped on exit either way.                       │
-│  Quit anyway?   [y] yes   [any other key] stay                   │
+│  The supervised server will be stopped on exit.                  │
+│  Confirm quit?   [y] yes   [any other key] stay                  │
 └──────────────────────────────────────────────────────────────────┘
 ```
 
-`Q` skips the question. A *running server* is deliberately not a reason to ask —
-it is stopped on exit every time by design, and prompting on the normal case is
-how you train someone to dismiss prompts unread.
+Starting and stopping states have distinct text. Failed and idle states do not
+prompt because no supervised process remains to stop. `Q` always skips the
+question.
 
 Shutdown stops the downloader as well as the server, and every step is bounded:
 SIGTERM, then SIGKILL, then giving up. A kill that takes twenty seconds cannot
@@ -844,7 +886,7 @@ VERSION=1.0.0 make release
 
 It refuses on a dirty tree — a release has to be reproducible from its tag.
 Because the release commit sets the version itself, the hook leaves it alone,
-so a `make release-minor` really does land as `0.8.0` and not `0.8.1`.
+so a `make release-minor` really does land as `0.9.0` and not `0.9.1`.
 
 ## Behavior notes
 

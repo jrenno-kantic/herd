@@ -169,7 +169,7 @@ Le dépôt embarque désormais un instantané des paliers de presets :
 ```
 data/
 ├── 16gb/models.ini      13 presets (4B à 27B)
-├── 32gb/models.ini       8 presets (12B à 35B)
+├── 32gb/models.ini       9 presets (12B à 35B)
 ├── scripts/llama-launch.js
 ├── scripts/test_call.sh
 └── start-router.sh
@@ -305,19 +305,31 @@ de savoir ce que c'est. Quand le port est tenu par son propre enfant supervisé,
 
 ## État de validation
 
-Validé sur la machine réelle (macOS / Apple Silicon) le 2026-08-10 :
+Validation automatisée sur macOS / Apple Silicon le 2026-08-17 :
 
 ```
-cargo build                  # aucun warning
-cargo test                   # 163/163 tests OK (+4 `live` ignorés)
-cargo clippy --all-targets   # aucun warning
-cargo fmt --check            # propre
+make verify                  # check, clippy, format, tests, build release
+cargo test                   # 456 tests OK (+14 tests `live`/système ignorés)
 ```
 
-Rendu vérifié contre le vrai `~/models/32gb/models.ini` : les 8 presets
+Rendu vérifié contre le vrai `~/models/32gb/models.ini` : les 9 presets
 s'affichent avec repo, ctx et mode spéculatif, et l'aperçu argv est correct.
 Endpoints vérifiés contre un vrai llama-server (build 10330) : `/health`
 renvoie bien `200 {"status":"ok"}` et `/v1/models` la forme « models ».
+
+## Interface 0.8.2 (2026-08-17)
+
+- `q` ouvre une confirmation seulement pendant qu'un processus manuel ou
+  routeur est en démarrage, en service ou en arrêt. La modale nomme le preset
+  manuel ou le mode routeur avec sa limite `models-max`, puis liste les autres
+  travaux abandonnés. Sans serveur supervisé actif, `q` quitte directement ;
+  `Q` reste la sortie immédiate.
+- La colonne `REPO` de Models prend toute la largeur restante, sans plafond
+  arbitraire, après conservation ou retrait ordonné des colonnes fixes.
+- La barre latérale affiche architecture, GPU, RAM installée et mémoire
+  disponible. La détection GPU est asynchrone et la mémoire est rééchantillonnée
+  aux transitions de cycle de vie de llama-server.
+- Le palier `32gb` contient 9 presets, avec `qwen38-27b`.
 
 ## Fiabilité du process llama-server (2026-08-11)
 
@@ -426,20 +438,21 @@ RAM disponible. Le détail des invariants est dans `CLAUDE.md` ; en résumé :
 
 ## Cache local, tailles mesurées, TTFT et `:help` (2026-08-12)
 
-Quatre points de la TODO, dont trois s'appuient sur le même fait nouveau : le
-cache de llama.cpp est **mesurable**, il n'a plus à être deviné.
+Quatre points de l'ancienne TODO, dont trois s'appuient sur le même fait
+nouveau : le cache de llama.cpp est **mesurable**, il n'a plus à être deviné.
 
-- **Écran Hub** (`2`). Models dit ce que ce palier sait lancer, Hub dit ce que la
-  machine possède, et les deux listes diffèrent dans les deux sens. Colonnes
+- **Écran Hub** (`8`, initialement `2`). Models dit ce que ce palier sait
+  lancer, Hub dit ce que la machine possède, et les deux listes diffèrent dans
+  les deux sens. Colonnes
   `SIZE` (les poids que llama.cpp chargerait) et `DISK` (tout ce que le dépôt
   occupe, révisions périmées comprises) : sur cette machine, 6,3G de modèle dans
   13,1G de répertoire. `*` sur `DISK` = deux quantisations partagent le
   répertoire, dit plutôt que divisé — le cache ne tient aucune comptabilité par
   quantisation. Les modèles qu'aucun preset du palier ne nomme sont en cyan
   (pas en rouge : ce n'est pas une erreur, ils peuvent appartenir à un autre
-  palier). `y` copie une strophe `models.ini` prête à coller. **Aucune touche de
-  suppression, volontairement** : libérer 17 Gio ne se propose pas à une touche
-  de `j`, et herd ne touche pas à ce qu'il n'a pas posé.
+  palier). `y` copie une strophe `models.ini` prête à coller. **À ce stade,
+  aucune touche de suppression, volontairement** : libérer 17 Gio ne se propose
+  pas à une touche de `j`, et herd ne touche pas à ce qu'il n'a pas posé.
 - **Tailles mesurées** (voir la section mémoire ci-dessus).
 - **TTFT** sur Stats, à côté du débit : un modèle qui pagine ses poids génère à
   un rythme honorable et n'affiche pourtant rien pendant quatre secondes.

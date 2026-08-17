@@ -21,9 +21,10 @@ Input → UiEvent → App::update → Action → Executor → UiEvent → …
 
 A single tokio mpsc channel carries every `UiEvent`. `App::update` is pure and
 synchronous: it does no I/O and returns an `Action` (`None`, `Quit`,
-`RunCommand`, `ConfigPathChanged`, `RunChat`, `CopyToClipboard`, `Download`).
-All async work happens in `Executor` tasks, which feed their results back into
-the same channel.
+`RunCommand`, `ConfigPathChanged`, `RunChat`, `CopyToClipboard`, `DeleteModel`,
+`Download`). Async command work happens in `Executor` tasks; startup hardware
+and lifecycle memory probes are blocking workers started by `main`. Both feed
+results back into the same channel.
 
 The last four `Action`s are structured rather than string-encoded on purpose: a
 chat prompt is free text that must not be re-parsed out of a command line, a
@@ -60,13 +61,19 @@ stays pure.
   fetching what is not), `caps` (what a preset is optimised for and what it can
   do)
 - `services/` : clipboard (a platform command, not a crate), scripts, system
-  (shell)
+  (bounded shell execution plus hardware and available-memory probes)
 - `components/` : read-only renderers over `App` — one per screen
   (`models`, `hub`, `server`, `router`, `test`, `stats`, `settings`, `logs`),
   plus `sidebar`, `command_bar`, `status`, and the overlays — `confirm`
   (launch, quit and delete), `picker`, `help`, `command_help` and `about`
 - `layout.rs`, `theme.rs` : geometry and styles
 - `hooks/pre-commit` : bumps the patch version on every commit (`make hooks`)
+
+The startup hardware probe can invoke `system_profiler`, so `main` runs it on a
+blocking worker and feeds `UiEvent::SystemInfo` back through the same event
+channel. Each `LlamaStatus` schedules only the cheaper available-memory probe,
+whose result arrives as `UiEvent::AvailableMemory`; rendering never performs
+system I/O.
 
 ## Command Dispatch
 

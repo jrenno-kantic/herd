@@ -21,6 +21,11 @@ Menu order follows **how often a screen is wanted**, not how closely it relates
 to its neighbour: the first seven are what a session moves through, and Hub is
 where you go occasionally to see what the cache is holding.
 
+The fixed sidebar carries the active tier plus machine context needed when
+choosing a model: CPU architecture (`ARM`/`Intel` on macOS), GPU name, installed
+RAM, and currently available memory. Hardware discovery is asynchronous;
+available memory is sampled again on llama-server lifecycle changes.
+
 The digits are **positional**: inserting or moving a screen renumbers the rest.
 Nothing may hard-code one — not a test, and not a string in a component. The
 order lives in `Screen::ALL` alone, so moving one is a single line.
@@ -39,7 +44,9 @@ one where letters are shortcuts; every other mode captures text until `Enter` or
 - `Picker` - choosing a `models.ini`
 - `ConfirmLaunch` - answering a launch prompt: port in use, too large, or not
   downloaded
-- `ConfirmQuit` - answering "this would abandon work in flight"
+- `ConfirmQuit` - a normal `q` exit while a supervised process is starting,
+  serving, or stopping. It names the manual model or identifies router mode and
+  its configured resident limit; any other work in flight is listed separately
 - `ConfirmDelete` - answering "this removes a cached model". Its own mode
   rather than another launch prompt: every other confirmation asks whether to
   *start* something, and answering the wrong one of those costs a launch. This
@@ -66,7 +73,7 @@ Global:
 | `Tab` / `Shift-Tab` or `→` / `←` | cycle screens |
 | `:` | command bar — `:help` lists what it accepts |
 | `?` | key reference |
-| `q` | quit — asks first if work is in flight |
+| `q` | quit; confirm first while a manual model or router process is live |
 | `Q` | quit at once, abandoning it |
 
 Models:
@@ -155,6 +162,8 @@ because a section header takes two rows for one item.
 - Both key hints and the command listing are dropped or elided *visibly* when
   the pane is too narrow — a hint that vanished silently reads as a key that
   does not exist
+- The Models table gives every spare cell to `REPO`; fixed columns remain fully
+  visible, while narrow panes drop optional columns in their stated order
 - Presets that are not on the machine say so in a `LOCAL` column; until
   llama.cpp has been asked, nothing is claimed either way
 - Launching one asks first, naming the download size, then shows a byte-accurate
@@ -178,3 +187,7 @@ because a section header takes two rows for one item.
   `unknown` before Enter rather than after it
 - Input is ignored while a command is in flight — except `stop` and `:help`,
   the two things wanted *because* something is stuck
+- Normal quit confirms only while a supervised manual or router process is
+  starting, serving, or stopping. Manual mode names the model and router mode
+  reports its configured maximum rather than inventing an exact resident
+  count. Idle and failed states exit directly; `Q` remains immediate

@@ -16,9 +16,10 @@ Terminal geometry, built in `layout.rs`.
 | 8 Hub        |           + response  |
 |              | Stats:    session     |
 | tier  32gb   |           + memory    |
-| RAM   36 GiB | Settings: key list    |
-|              | Logs:     history     |
-|              | Hub:      cache list  |
+| arch  ARM    | Settings: key list    |
+| GPU Apple M3 | Logs:     history     |
+| free 8.5 GiB | Hub:      cache list  |
+| RAM   36 GiB |                       |
 +--------------+-----------------------+
 | Command Bar                (3 rows)  |
 +--------------------------------------+
@@ -26,8 +27,9 @@ Terminal geometry, built in `layout.rs`.
 +--------------------------------------+
 ```
 
-- Sidebar is a fixed 24 columns and also shows the active tier and installed RAM;
-  the screen area takes the rest
+- Sidebar is a fixed 24 columns and also shows the active tier, architecture,
+  GPU, currently available memory, and installed RAM; long GPU names are
+  visibly elided and the screen area takes the rest
 - Every screen but Settings and Logs splits its area in two:
 
   | Screen | Top | Bottom |
@@ -44,9 +46,10 @@ Terminal geometry, built in `layout.rs`.
 - The Models table **sizes itself to the width it is given**. It was a fixed 89
   columns, so on a 100-column terminal — 74 for that pane once the sidebar and
   borders are taken — the right-hand columns were clipped off the edge with
-  nothing to say they existed. The repo column shrinks first, then columns are
-  dropped in a stated order (ctx → opt → caps → spec → ram); the marker, name
-  and `LOCAL` never are
+  nothing to say they existed. Optional columns are dropped in a stated order
+  (ctx → opt → caps → spec → ram); the marker, name and `LOCAL` never
+  are. `REPO` receives every cell left over, with no arbitrary maximum, so a
+  wide terminal reveals more of the reference instead of drawing an empty gap
 - Its footer is **two lines**: what the highlighted preset is, then what the keys
   do. On one line the description pushed the key hints off the right edge
 - The Hub list sizes itself the same way (disk usage goes before the preset

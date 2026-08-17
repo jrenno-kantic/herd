@@ -1,7 +1,8 @@
 # Interactions
 
 - Instant feedback
-- No blocking UI: `App::update` does no I/O, all work runs in Executor tasks
+- No blocking UI: `App::update` does no I/O; command work runs in Executor
+  tasks and hardware probes run on blocking workers started by `main`
 - Async updates: results arrive as `UiEvent`s on the shared channel
 - Long-running output (llama-server logs) streams line by line rather than
   arriving in one block at the end

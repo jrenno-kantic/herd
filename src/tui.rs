@@ -823,6 +823,9 @@ spec-type = draft-mtp
     #[test]
     fn the_quit_prompt_names_the_work_in_flight() {
         let mut app = sample_app();
+        app.llama.server.state = crate::services::llama::ServerState::Serving;
+        app.llama.server.mode = crate::services::llama::LauncherMode::Manual;
+        app.llama.server.model = Some("gemma4-12b".into());
         app.update(crate::event::UiEvent::DownloadProgress {
             model: "gemma4-12b".into(),
             done: 1_073_741_824,
@@ -834,12 +837,25 @@ spec-type = draft-mtp
         )));
 
         let text = frame_text(&app, 120, 40);
-        assert!(text.contains("Work in progress"), "{text}");
+        assert!(text.contains("Confirm quit"), "{text}");
         assert!(text.contains("downloading gemma4-12b"), "{text}");
         assert!(
             text.contains("stopped on exit"),
             "the server note is missing"
         );
+    }
+
+    #[test]
+    fn an_idle_quit_does_not_open_a_confirmation() {
+        let mut app = sample_app();
+        let action = app.update(crate::event::UiEvent::Key(crossterm::event::KeyEvent::new(
+            crossterm::event::KeyCode::Char('q'),
+            crossterm::event::KeyModifiers::NONE,
+        )));
+
+        let text = frame_text(&app, 120, 40);
+        assert!(matches!(action, crate::app::Action::Quit));
+        assert!(!text.contains("Confirm quit"), "{text}");
     }
 
     /// The Server screen, serving the preset the cursor is on — the case

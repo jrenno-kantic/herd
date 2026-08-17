@@ -73,12 +73,7 @@ pub const GLOBAL: &[Binding] = &[
     brief(&["c"], "c", "config", "choose which models.ini to use"),
     brief(&[":"], ":", "command", "command bar"),
     brief(&["?"], "?", "help", "this help"),
-    brief(
-        &["q"],
-        "q",
-        "quit",
-        "quit — asks first if work is in flight",
-    ),
+    brief(&["q"], "q", "quit", "quit — asks if a server is active"),
     full(&["Q"], "Q", "quit at once, abandoning anything in flight"),
 ];
 

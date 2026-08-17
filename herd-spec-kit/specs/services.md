@@ -99,6 +99,10 @@ in `App::submit_command`, so that arm could no longer fire — along with a 300 
 
 ## System Service
 
-Executes shell commands via `sh <command>`, bounded by a 30s timeout. The one
-piece of the original generic runner that does what it claims, and the reason
-it was kept.
+Executes shell commands via `sh <command>`, bounded by a 30s timeout. It also
+owns machine telemetry for the sidebar: a compile-time architecture label,
+macOS GPU discovery through `system_profiler`, and reclaimable available memory
+from `vm_stat` (Linux uses `MemAvailable`). GPU discovery runs once on a
+blocking worker; cheaper memory-only samples run again on llama lifecycle
+events. Failures produce unknown values, never block startup and never become
+invented hardware claims.

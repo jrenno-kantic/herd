@@ -265,13 +265,12 @@ const W_LOCAL: usize = 9;
 /// Selection caret, favourite star, lifecycle glyph.
 const W_MARKER: usize = 3;
 const REPO_MIN: usize = 12;
-const REPO_MAX: usize = 30;
 
 impl Columns {
-    /// Everything on, repo at its widest.
+    /// Everything on, repo at its minimum useful width.
     fn full() -> Self {
         Self {
-            repo: REPO_MAX,
+            repo: REPO_MIN,
             ctx: true,
             ram: true,
             opt: true,
@@ -305,12 +304,6 @@ impl Columns {
     fn for_width(width: usize) -> Self {
         let mut columns = Self::full();
 
-        // Give the repo column back whatever is spare, before anything is
-        // dropped — a wide terminal should show more repo, not more space.
-        while columns.width() > width && columns.repo > REPO_MIN {
-            columns.repo -= 1;
-        }
-
         // Context size and the optimisation tokens are the first to go:
         // both are visible in the argv preview below, where the memory
         // estimate and the availability are not.
@@ -331,8 +324,12 @@ impl Columns {
             }
         }
 
-        while columns.width() < width && columns.repo < REPO_MAX {
-            columns.repo += 1;
+        // The repo is the sole elastic column and consumes every remaining
+        // cell. There is intentionally no maximum: a wide terminal should
+        // reveal the full repository reference instead of ending in a large
+        // unused gap after an arbitrary 30-character ceiling.
+        if columns.width() < width {
+            columns.repo += width - columns.width();
         }
 
         columns
@@ -515,11 +512,15 @@ mod column_tests {
         let columns = Columns::for_width(WIDE);
 
         assert!(columns.ctx && columns.ram && columns.opt && columns.caps && columns.spec);
-        assert!(
-            columns.width() <= WIDE,
-            "still overflows: {}",
-            columns.width()
-        );
+        assert_eq!(columns.width(), WIDE, "repo did not consume spare width");
+    }
+
+    #[test]
+    fn a_very_wide_terminal_keeps_growing_the_repo_column() {
+        let columns = Columns::for_width(180);
+
+        assert_eq!(columns.width(), 180);
+        assert!(columns.repo > 30, "the old repo ceiling is still in force");
     }
 
     /// The point of the exercise: never wider than the pane. Clipping is

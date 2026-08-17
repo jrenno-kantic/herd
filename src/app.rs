@@ -103,7 +103,7 @@ pub enum Mode {
     /// Something is already listening on the configured port and herd
     /// did not start it. Waiting for the user to confirm or cancel.
     ConfirmLaunch,
-    /// Quitting would abandon work in flight. Waiting for an answer.
+    /// A supervised server is live and normal quit waits for confirmation.
     ConfirmQuit,
     /// The `?` overlay. A mode rather than a screen so it can be summoned
     /// from anywhere and dismissed back to where the user was.
@@ -1271,6 +1271,7 @@ pub struct App {
     /// ...and the last width, for the one other piece of geometry `update`
     /// has to know: how many lines of the argv preview its pane hides.
     pub cols: u16,
+    pub system: crate::services::system::SystemInfo,
     pub llama: LauncherState,
 }
 
@@ -1318,6 +1319,7 @@ impl App {
             running: false,
             rows: DEFAULT_ROWS,
             cols: DEFAULT_COLS,
+            system: crate::services::system::SystemInfo::default(),
             llama: LauncherState::new(config_path, last_launched, prefs),
         }
     }
@@ -1433,6 +1435,14 @@ impl App {
             }
             UiEvent::LlamaStatus(snapshot) => {
                 self.apply_status(snapshot);
+                Action::None
+            }
+            UiEvent::SystemInfo(info) => {
+                self.system = info;
+                Action::None
+            }
+            UiEvent::AvailableMemory(available) => {
+                self.system.available_memory_gib = available;
                 Action::None
             }
             UiEvent::PortInUse { port, name, retry } => {
@@ -2356,14 +2366,14 @@ impl App {
         work
     }
 
-    /// `q`: quits, or asks first when something would be lost.
+    /// `q`: asks only while a supervised server is live. `Q` is immediate.
     fn quit(&mut self) -> Action {
-        if self.in_flight().is_empty() {
-            return Action::Quit;
+        if self.llama.server.state.is_live() {
+            self.mode = Mode::ConfirmQuit;
+            Action::None
+        } else {
+            Action::Quit
         }
-
-        self.mode = Mode::ConfirmQuit;
-        Action::None
     }
 
     fn handle_quit_key(&mut self, key: KeyEvent) -> Action {
@@ -3053,9 +3063,10 @@ alias = qwen3-coder
     }
 
     #[test]
-    fn q_quits_from_browse_mode() {
+    fn q_quits_directly_when_no_server_is_live() {
         let mut app = app_with_sample();
         assert!(matches!(app.update(ch('q')), Action::Quit));
+        assert_eq!(app.mode, Mode::Browse);
     }
 
     #[test]
@@ -3890,7 +3901,7 @@ hf-repo = unsloth/gemma-4-12B-it-qat-GGUF:UD-Q4_K_XL
 
         assert_eq!(tiers.len(), 2);
         assert_eq!(tiers[0].presets, 13, "16gb preset count");
-        assert_eq!(tiers[1].presets, 8, "32gb preset count");
+        assert_eq!(tiers[1].presets, 9, "32gb preset count");
     }
 
     /// The warning the picker exists for: on a small machine most of the
@@ -3960,7 +3971,7 @@ hf-repo = unsloth/gemma-4-12B-it-qat-GGUF:UD-Q4_K_XL
             Action::ConfigPathChanged(path) => {
                 assert_eq!(path, shipped("32gb"));
                 assert_eq!(app.llama.config_path, shipped("32gb"));
-                assert_eq!(app.llama.model_names().len(), 8);
+                assert_eq!(app.llama.model_names().len(), 9);
             }
             other => panic!("expected ConfigPathChanged, got {other:?}"),
         }
@@ -4527,29 +4538,51 @@ hf-repo = unsloth/gemma-4-12B-it-qat-GGUF:UD-Q4_K_XL
         assert!(app.llama.relaunch_blocked().is_none());
     }
 
-    /// An idle app quits on `q` with no ceremony — a prompt on the normal
-    /// case would train the user to dismiss it unread.
+    /// With no supervised process there is nothing for HERD to stop.
     #[test]
     fn quitting_with_nothing_running_does_not_ask() {
         let mut app = app_with_sample();
 
         assert!(app.in_flight().is_empty());
         assert!(matches!(app.update(ch('q')), Action::Quit));
+        assert_eq!(app.mode, Mode::Browse);
     }
 
     /// A supervised server is deliberately *not* work in flight: stopping
     /// it on exit is the documented behaviour, every time.
     #[test]
-    fn a_running_server_alone_is_not_a_reason_to_ask() {
+    fn a_running_server_asks_but_is_not_listed_as_abandoned_work() {
         let mut app = app_with_sample();
         app.llama.server.state = ServerState::Serving;
+        app.llama.server.mode = LauncherMode::Manual;
 
         assert!(app.in_flight().is_empty());
-        assert!(matches!(app.update(ch('q')), Action::Quit));
+        assert!(matches!(app.update(ch('q')), Action::None));
+        assert_eq!(app.mode, Mode::ConfirmQuit);
     }
 
     #[test]
-    fn quitting_mid_download_asks_first() {
+    fn a_live_router_asks_before_quitting() {
+        let mut app = app_with_sample();
+        app.llama.server.state = ServerState::Starting;
+        app.llama.server.mode = LauncherMode::Router;
+
+        assert!(matches!(app.update(ch('q')), Action::None));
+        assert_eq!(app.mode, Mode::ConfirmQuit);
+    }
+
+    #[test]
+    fn a_failed_server_does_not_trigger_quit_confirmation() {
+        let mut app = app_with_sample();
+        app.llama.server.state = ServerState::Error("failed".into());
+        app.llama.server.mode = LauncherMode::Manual;
+
+        assert!(matches!(app.update(ch('q')), Action::Quit));
+        assert_eq!(app.mode, Mode::Browse);
+    }
+
+    #[test]
+    fn a_download_without_a_live_server_does_not_trigger_the_server_prompt() {
         let mut app = app_with_sample();
         app.update(UiEvent::DownloadProgress {
             model: "gemma4-12b".into(),
@@ -4557,20 +4590,17 @@ hf-repo = unsloth/gemma-4-12B-it-qat-GGUF:UD-Q4_K_XL
             total: 4_000,
         });
 
-        assert!(matches!(app.update(ch('q')), Action::None));
-        assert_eq!(app.mode, Mode::ConfirmQuit);
+        assert!(matches!(app.update(ch('q')), Action::Quit));
+        assert_eq!(app.mode, Mode::Browse);
         assert!(app.in_flight()[0].contains("gemma4-12b"));
-
-        match app.update(ch('y')) {
-            Action::Quit => {}
-            other => panic!("y must quit, got {other:?}"),
-        }
     }
 
     #[test]
     fn declining_the_quit_prompt_stays_put() {
         let mut app = app_with_sample();
         app.llama.chat_pending = true;
+        app.llama.server.state = ServerState::Serving;
+        app.llama.server.mode = LauncherMode::Manual;
 
         app.update(ch('q'));
         assert_eq!(app.mode, Mode::ConfirmQuit);

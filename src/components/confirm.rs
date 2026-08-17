@@ -12,6 +12,7 @@
 use crate::{
     app::{App, Confirm},
     components::centered,
+    services::llama::{LauncherMode, ServerState},
     theme::Theme,
 };
 use ratatui::layout::Rect;
@@ -19,44 +20,106 @@ use ratatui::text::Line;
 use ratatui::widgets::{Block, Borders, Clear, Paragraph};
 use ratatui::Frame;
 
-/// The exit prompt: what would be abandoned, and how to abandon it anyway.
+/// The exit prompt: which supervised server will stop, what else would be
+/// abandoned, and how to proceed anyway.
 ///
 /// Separate from the launch prompt because it answers a different question
 /// and lists live state rather than a static reason.
 pub fn render_quit(frame: &mut Frame, app: &App, area: Rect) {
     let work = app.in_flight();
-    let popup = centered(area, 68, (work.len() + 7) as u16);
-
+    let server_live = app.llama.server.state.is_live();
     let mut lines = vec![
         Line::from(""),
-        Line::styled(
-            "  Quitting now would abandon:".to_string(),
-            Theme::status_error(),
-        ),
+        Line::styled("  Quit HERD?".to_string(), Theme::normal()),
+        Line::styled(format!("  {}", serving_summary(app)), Theme::status_ready()),
     ];
-    for item in &work {
-        lines.push(Line::styled(format!("    · {item}"), Theme::normal()));
+
+    if !work.is_empty() {
+        lines.push(Line::from(""));
+        lines.push(Line::styled(
+            "  Quitting now would also abandon:".to_string(),
+            Theme::status_error(),
+        ));
+        for item in &work {
+            lines.push(Line::styled(format!("    · {item}"), Theme::normal()));
+        }
     }
     lines.push(Line::from(""));
     lines.push(Line::styled(
-        "  The server is stopped on exit either way.".to_string(),
+        if server_live {
+            "  The supervised server will be stopped on exit."
+        } else {
+            "  No supervised server needs to be stopped on exit."
+        }
+        .to_string(),
         Theme::logs(),
     ));
     lines.push(Line::styled(
-        "  Quit anyway?   [y] yes   [any other key] stay".to_string(),
+        "  Confirm quit?   [y] yes   [any other key] stay".to_string(),
         Theme::normal(),
     ));
+
+    let popup = centered(area, 68, (lines.len() + 2) as u16);
 
     frame.render_widget(Clear, popup);
     frame.render_widget(
         Paragraph::new(lines).style(Theme::normal()).block(
             Block::default()
-                .title(" Work in progress ")
+                .title(" Confirm quit ")
                 .borders(Borders::ALL)
                 .border_style(Theme::status_error()),
         ),
         popup,
     );
+}
+
+/// Human-facing state for the quit decision.
+///
+/// Manual mode names the one model HERD supervises. Router mode deliberately
+/// reports its configured resident limit rather than claiming an exact loaded
+/// count: llama-server owns that list and does not send it with lifecycle
+/// snapshots.
+fn serving_summary(app: &App) -> String {
+    let server = &app.llama.server;
+    let model = crate::components::truncate(server.model.as_deref().unwrap_or("unknown model"), 18);
+
+    match (&server.state, server.mode) {
+        (ServerState::Starting, LauncherMode::Manual) => {
+            format!("Model '{model}' is currently starting.")
+        }
+        (ServerState::Serving, LauncherMode::Manual) => {
+            format!("Model '{model}' is currently being served.")
+        }
+        (ServerState::Stopping, LauncherMode::Manual) => {
+            format!("Model '{model}' is currently stopping.")
+        }
+        (ServerState::Starting, LauncherMode::Router) => format!(
+            "Router mode is starting; it can keep {} loaded.",
+            model_count(app.llama.router.models_max)
+        ),
+        (ServerState::Serving, LauncherMode::Router) => format!(
+            "Router mode is active; it can keep {} loaded.",
+            model_count(app.llama.router.models_max)
+        ),
+        (ServerState::Stopping, LauncherMode::Router) => format!(
+            "Router mode is stopping; {} may still be loaded.",
+            model_count(app.llama.router.models_max)
+        ),
+        (ServerState::Error(_), LauncherMode::Manual) => {
+            format!("No model is currently served; the last launch of '{model}' failed.")
+        }
+        (ServerState::Error(_), LauncherMode::Router) => {
+            "No models are currently served; router mode failed.".to_string()
+        }
+        _ => "No model is currently being served.".to_string(),
+    }
+}
+
+fn model_count(count: u32) -> String {
+    match count {
+        1 => "up to 1 model".to_string(),
+        n => format!("up to {n} models"),
+    }
 }
 
 /// The delete prompt: what goes, how much of it, and what goes with it.
@@ -189,6 +252,47 @@ fn advice(reason: &Confirm) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::path::PathBuf;
+
+    fn app_with_server(state: ServerState, mode: LauncherMode, model: Option<&str>) -> App {
+        let mut app = App::with_config_path(PathBuf::from("missing-models.ini"));
+        app.llama.server.state = state;
+        app.llama.server.mode = mode;
+        app.llama.server.model = model.map(str::to_string);
+        app
+    }
+
+    #[test]
+    fn quit_summary_distinguishes_idle_manual_and_router_modes() {
+        let idle = app_with_server(ServerState::Off, LauncherMode::Idle, None);
+        assert_eq!(
+            serving_summary(&idle),
+            "No model is currently being served."
+        );
+
+        let manual = app_with_server(
+            ServerState::Serving,
+            LauncherMode::Manual,
+            Some("gemma4-12b"),
+        );
+        assert_eq!(
+            serving_summary(&manual),
+            "Model 'gemma4-12b' is currently being served."
+        );
+
+        let mut router = app_with_server(ServerState::Serving, LauncherMode::Router, None);
+        router.llama.router.models_max = 3;
+        assert_eq!(
+            serving_summary(&router),
+            "Router mode is active; it can keep up to 3 models loaded."
+        );
+    }
+
+    #[test]
+    fn router_model_count_uses_singular_and_plural_grammar() {
+        assert_eq!(model_count(1), "up to 1 model");
+        assert_eq!(model_count(2), "up to 2 models");
+    }
 
     /// Each reason must say something of its own: a modal that reads the
     /// same whatever went wrong tells the user nothing.
