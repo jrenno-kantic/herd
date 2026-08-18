@@ -43,9 +43,14 @@ current formula.
 - The generated formula is named `herd-llm` and declares `hf` and `llama.cpp`.
 - Prerelease Homebrew publication was skipped, proving that the stable `0.8.7`
   source formula remains unchanged.
+- Local `make verify` and Ubuntu Verify pass. GitHub's macOS Verify currently
+  times out in `a_healthy_process_transitions_to_serving` and
+  `stopping_then_launching_another_model_switches_cleanly`; this is an open
+  release-readiness issue, not a cargo-dist build failure.
 - The next stable tag performs the first automated tap update and tap-native
-  Homebrew validation. Until that succeeds, the source formula is the rollback
-  path.
+  Homebrew validation, but it must not be pushed until the independent Verify
+  workflow is green on both platforms. Until that succeeds, the source formula
+  is the rollback path.
 
 The intended generated configuration is equivalent to:
 
@@ -91,12 +96,15 @@ Never place the token in Cargo metadata, workflow YAML, logs, or the tap.
 
 1. Run `make verify` and cut the versioned release commit and annotated tag
    with `make release`, `make release-minor`, or `make release-major`.
-2. Push the release commit and its `vX.Y.Z` tag.
-3. The generated dist workflow builds archives for each declared target,
+2. Push the release commit first and require the independent Verify workflow to
+   pass on Linux and macOS. The generated Release workflow does not depend on
+   Verify and cannot enforce this gate itself.
+3. Push the `vX.Y.Z` tag only after that branch verification is green.
+4. The generated dist workflow builds archives for each declared target,
    creates or updates the GitHub release, and publishes only a stable release
    to the tap.
-4. The tap's own workflow validates the formula independently.
-5. If publishing fails after the GitHub release succeeds, keep the previous
+5. The tap's own workflow validates the formula independently.
+6. If publishing fails after the GitHub release succeeds, keep the previous
    formula available and rerun or repair the publishing job; do not replace it
    with an unverified manual checksum update.
 

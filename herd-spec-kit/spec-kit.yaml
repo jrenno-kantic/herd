@@ -2,7 +2,7 @@ id: herd
 name: HERD
 version: 3.1.0
 date: 2026-08-18
-tracks: herd 0.8.7
+tracks: herd 0.8.8-rc.4
 
 description: >
   Terminal launcher for local LLMs. Browse the model presets in a

@@ -27,7 +27,7 @@ and currently available memory. GPU discovery runs in the background; available
 memory is sampled again whenever llama-server starts, loads, stops, or exits.
 
 ```
-┌HERD 0.8.7────────────┐┌ Models · 32gb · ~/models/32gb/models.ini ────────────────────── 1/8 ┐
+┌HERD 0.8.8-rc.4───────┐┌ Models · 32gb · ~/models/32gb/models.ini ────────────────────── 1/8 ┐
 │ ▸ 1 Models           ││   NAME            REPO              RAM     OPT CAPS SPEC   LOCAL   │
 │   2 Server           ││▸★●gemma4-12b      unsloth/gemma-4…  7.3G  qat ud    S  mtp         █│
 │   3 Router           ││  ★gemma4-31b      unsloth/gemma-4…~18.3G  qat ud    S  mtp not local│
@@ -119,7 +119,7 @@ The formula is named `herd-llm` to avoid ambiguity; the installed executable is
 cargo run
 cargo run -- --config ~/models/16gb/models.ini   # pick a specific preset file
 cargo run -- --help
-cargo run -- --version                           # herd 0.8.7 (a1b2c3d 2026-08-18)
+cargo run -- --version                           # herd 0.8.8-rc.4 (a1b2c3d 2026-08-18)
 ```
 
 ### Running a downloaded macOS binary
@@ -159,7 +159,7 @@ behaves on this machine:
 ```
 ┌ About ─────────────────────────────────────────────────────────┐
 │                                                                │
-│  herd 0.8.7                                                    │
+│  herd 0.8.8-rc.4                                               │
 │  Terminal control plane for llama-server                       │
 │                                                                │
 │  build   0f68353-dirty · 2026-08-18                            │
@@ -925,7 +925,14 @@ The generated workflow and `HOMEBREW_TAP_TOKEN` are configured. The
 `v0.8.8-rc.2` prerelease validated all three target builds, checksums, release
 assembly, formula generation, and the packaged binary's build stamp; as
 intended, it did not replace the stable formula. Tap publication and its native
-Homebrew CI are exercised by the next stable tag. The detailed contract and
+Homebrew CI are exercised by the next stable tag.
+
+The release workflow and the ordinary Verify workflow are independent. Do not
+push the next stable tag until Verify is green on both Linux and macOS: Linux
+and local verification pass, but GitHub's macOS runner currently times out in
+`a_healthy_process_transitions_to_serving` and
+`stopping_then_launching_another_model_switches_cleanly`. A green dist release
+alone is therefore not the stable-release gate. The detailed contract and
 rollout are recorded in
 [`herd-spec-kit/specs/distribution.md`](herd-spec-kit/specs/distribution.md).
 

@@ -1,6 +1,6 @@
 # Roadmap
 
-Status as of 2026-08-18 (herd 0.8.7).
+Status as of 2026-08-18 (herd 0.8.8-rc.4; stable Homebrew formula 0.8.7).
 
 ## Delivered
 
@@ -77,10 +77,15 @@ Status as of 2026-08-18 (herd 0.8.7).
 
 ## Next
 
-Publish the first stable dist-managed release and let the tap's Homebrew CI
-validate the generated prebuilt `herd-llm` formula before retiring the working
-source formula as the active path. The rollback and acceptance checks remain in
-`distribution.md`.
+Resolve the two macOS-only GitHub Verify timeouts in the process-supervision
+tests. Local verification and Ubuntu CI pass, but a stable tag must wait for
+both CI platforms because the dist Release workflow does not depend on the
+separate Verify workflow.
+
+Then publish the first stable dist-managed release and let the tap's Homebrew
+CI validate the generated prebuilt `herd-llm` formula before retiring the
+working source formula as the active path. The rollback and acceptance checks
+remain in `distribution.md`.
 
 `TODO.md` currently has no other outstanding tasks. Longer-term candidates
 remain in `doc/PROMPT_NEXT_STEPS.md` (French): auto-restart on
