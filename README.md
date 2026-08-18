@@ -27,7 +27,7 @@ and currently available memory. GPU discovery runs in the background; available
 memory is sampled again whenever llama-server starts, loads, stops, or exits.
 
 ```
-┌HERD 0.8.3────────────┐┌ Models · 32gb · ~/models/32gb/models.ini ────────────────────── 1/8 ┐
+┌HERD 0.8.7────────────┐┌ Models · 32gb · ~/models/32gb/models.ini ────────────────────── 1/8 ┐
 │ ▸ 1 Models           ││   NAME            REPO              RAM     OPT CAPS SPEC   LOCAL   │
 │   2 Server           ││▸★●gemma4-12b      unsloth/gemma-4…  7.3G  qat ud    S  mtp         █│
 │   3 Router           ││  ★gemma4-31b      unsloth/gemma-4…~18.3G  qat ud    S  mtp not local│
@@ -102,7 +102,7 @@ the detected version (or error) for both tools.
 cargo run
 cargo run -- --config ~/models/16gb/models.ini   # pick a specific preset file
 cargo run -- --help
-cargo run -- --version                           # herd 0.8.3 (a1b2c3d 2026-08-18)
+cargo run -- --version                           # herd 0.8.7 (a1b2c3d 2026-08-18)
 ```
 
 ### Running a downloaded macOS binary
@@ -142,7 +142,7 @@ behaves on this machine:
 ```
 ┌ About ─────────────────────────────────────────────────────────┐
 │                                                                │
-│  herd 0.8.3                                                    │
+│  herd 0.8.7                                                    │
 │  Terminal control plane for llama-server                       │
 │                                                                │
 │  build   0f68353-dirty · 2026-08-18                            │
@@ -895,6 +895,10 @@ VERSION=1.0.0 make release
 It refuses on a dirty tree — a release has to be reproducible from its tag.
 Because the release commit sets the version itself, the hook leaves it alone,
 so a `make release-minor` really does land as `0.9.0` and not `0.9.1`.
+
+## License
+
+HERD is distributed under the [MIT License](LICENSE).
 
 ## Behavior notes
 

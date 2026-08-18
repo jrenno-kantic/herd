@@ -1,12 +1,15 @@
 [package]
 name = "herd"
-version = "0.8.6"
+version = "0.8.7"
 edition = "2021"
 # The floor that has actually been built and tested, not a probe of the
 # true minimum. Edition 2024 is a separate, deliberate migration: it makes
 # `env::set_var` unsafe, which the config-resolution tests use.
 rust-version = "1.97"
 description = "Terminal control plane for llama-server"
+license = "MIT"
+repository = "https://github.com/jrenno-kantic/herd"
+homepage = "https://github.com/jrenno-kantic/herd"
 
 [dependencies]
 ratatui = "0.30"
