@@ -37,6 +37,7 @@ The intended generated configuration is equivalent to:
 ```toml
 [dist]
 cargo-dist-version = "0.32.0"
+rust-toolchain-version = "stable"
 ci = "github"
 installers = ["homebrew"]
 tap = "jrenno-kantic/homebrew-tap"
@@ -58,6 +59,9 @@ hf = { stage = ["run"] }
 `.github/workflows/release.yml`; the generated files must not be hand-written
 from this example. Pin the tool version that generated the workflow, and use
 `dist init` again to upgrade it so configuration and CI move together.
+The explicit release toolchain is required because a hosted runner may expose
+an older preinstalled Cargo that does not honor the repository's rustup
+override before dist invokes it.
 
 ## Credentials and permissions
 
