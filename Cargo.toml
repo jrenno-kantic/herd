@@ -1,6 +1,6 @@
 [package]
 name = "herd"
-version = "0.8.7"
+version = "0.8.8-rc.1"
 edition = "2021"
 # The floor that has actually been built and tested, not a probe of the
 # true minimum. Edition 2024 is a separate, deliberate migration: it makes
@@ -21,3 +21,8 @@ serde_json = "1"
 reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
 chrono = { version = "0.4.45", default-features = false, features = ["clock", "std"] }
 libc = "0.2.189"
+
+# The profile that 'dist' will build with
+[profile.dist]
+inherits = "release"
+lto = "thin"

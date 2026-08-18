@@ -1,0 +1,27 @@
+[workspace]
+members = ["cargo:."]
+
+# Config for 'dist'
+[dist]
+# The preferred dist version to use in CI (Cargo.toml SemVer syntax)
+cargo-dist-version = "0.32.0"
+# CI backends to support
+ci = "github"
+# The installers to generate for each app
+installers = ["homebrew"]
+# A GitHub repo to push Homebrew formulas to
+tap = "jrenno-kantic/homebrew-tap"
+# Customize the Homebrew formula name
+formula = "herd-llm"
+# Target platforms to build apps for (Rust target-triple syntax)
+targets = ["aarch64-apple-darwin", "x86_64-apple-darwin", "x86_64-unknown-linux-gnu"]
+# Publish jobs to run in CI
+publish-jobs = ["homebrew"]
+# Whether to publish prereleases to package managers
+publish-prereleases = false
+
+# Commands HERD executes at runtime. These become dependencies of the
+# generated Homebrew formula rather than build-machine-only packages.
+[dist.dependencies.homebrew]
+hf = { stage = ["run"] }
+"llama.cpp" = { stage = ["run"] }

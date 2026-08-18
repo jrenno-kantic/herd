@@ -98,6 +98,23 @@ optional: without it, local models can still be browsed and launched, but
 downloads are disabled and the reason is written to the log. `:about` shows
 the detected version (or error) for both tools.
 
+### Homebrew
+
+The supported Homebrew formula installs HERD together with `llama.cpp`
+(`llama-server`) and the Hugging Face `hf` CLI:
+
+```bash
+brew install jrenno-kantic/tap/herd-llm
+herd --version
+```
+
+The formula is maintained in
+[`jrenno-kantic/homebrew-tap`](https://github.com/jrenno-kantic/homebrew-tap).
+The formula is named `herd-llm` to avoid ambiguity; the installed executable is
+`herd`.
+
+### From source
+
 ```bash
 cargo run
 cargo run -- --config ~/models/16gb/models.ini   # pick a specific preset file
@@ -895,6 +912,20 @@ VERSION=1.0.0 make release
 It refuses on a dirty tree — a release has to be reproducible from its tag.
 Because the release commit sets the version itself, the hook leaves it alone,
 so a `make release-minor` really does land as `0.9.0` and not `0.9.1`.
+
+The `vX.Y.Z` tag is also the release-automation boundary. The current Homebrew
+formula builds that tagged source. The planned distribution pipeline uses
+[`dist` (formerly cargo-dist)](https://axodotdev.github.io/cargo-dist/) to build
+versioned macOS and Linux archives, attach them to the GitHub release, and
+publish a generated `herd-llm` formula to the existing tap. This will remove
+Rust from the end-user installation path while keeping `llama.cpp` and `hf` as
+runtime formula dependencies.
+
+That migration is not active until its generated workflow has been reviewed,
+`HOMEBREW_TAP_TOKEN` has been configured on the HERD repository, and the
+generated formula passes `brew style`, `brew audit`, installation, and
+`herd --version` tests. The detailed contract and rollout are recorded in
+[`herd-spec-kit/specs/distribution.md`](herd-spec-kit/specs/distribution.md).
 
 ## License
 

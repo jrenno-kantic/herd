@@ -25,3 +25,4 @@ goals:
   - never claim what cannot be measured: unknown is a valid answer
   - measure rather than estimate wherever the file is already on disk
   - every commit carries a new version number
+  - reproducible tagged releases install through the public Homebrew tap

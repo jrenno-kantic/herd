@@ -60,6 +60,8 @@ Status as of 2026-08-18 (herd 0.8.7).
   (config, tier, memory, cache, llama-server, hf) in one place
 - Startup preflight: `llama-server` is required before the TUI opens; a missing
   `hf` leaves local launching available while downloads are disabled explicitly
+- Public Homebrew distribution through `jrenno-kantic/tap/herd-llm`, with
+  `llama.cpp` and `hf` declared as runtime dependencies and tap-native CI
 - A `[mono-focus]` profile: a reserved ini section switched on per preset (`m`
   on Settings) for one client looping on the same base prompt
 - **Fixed:** the session overrides reached the argv *preview* and not the
@@ -73,8 +75,14 @@ Status as of 2026-08-18 (herd 0.8.7).
 
 ## Next
 
-`TODO.md` currently has no outstanding tasks. Longer-term candidates remain in
-`doc/PROMPT_NEXT_STEPS.md` (French): auto-restart on
+Adopt dist (formerly cargo-dist) as the release and Homebrew packaging helper,
+following `distribution.md`: generate per-platform release archives and the
+`herd-llm` formula, configure a tap-scoped `HOMEBREW_TAP_TOKEN`, retain runtime
+dependencies on `llama.cpp` and `hf`, and switch away from the working source
+formula only after the generated formula passes the full acceptance checks.
+
+`TODO.md` currently has no other outstanding tasks. Longer-term candidates
+remain in `doc/PROMPT_NEXT_STEPS.md` (French): auto-restart on
 crash, a full end-to-end test against a real `llama-server` (spawn, model load,
 kill), flagging presets duplicated across tiers, reading vision support from the
 repo listing rather than the model name, a `QUANT` column, and sizing a preset
