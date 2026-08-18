@@ -59,6 +59,15 @@ async fn main() -> Result<()> {
         }
     };
 
+    // Probe before entering the alternate screen, so a missing required
+    // server is printed normally and cannot be hidden by terminal cleanup.
+    // `hf` is optional: browsing and launching local models remain useful,
+    // while the UI disables only the operation that depends on it.
+    let tools = services::preflight::check().await;
+    if let Some(error) = tools.required_error() {
+        anyhow::bail!("required tool unavailable: {error}");
+    }
+
     // Resolved once, then shared: the Models screen and the Executor must
     // agree on which models.ini is in play.
     //
@@ -77,7 +86,8 @@ async fn main() -> Result<()> {
     // start.
     let prefs = Prefs::load();
 
-    let mut app = App::restored(config_path.clone(), session.model.clone(), prefs);
+    let mut app =
+        App::restored_with_tools(config_path.clone(), session.model.clone(), prefs, tools);
     let mut terminal = tui::TerminalSession::enter()?;
     let (event_tx, mut event_rx) = mpsc::unbounded_channel();
     let (log_tx, mut log_rx) = event::log_channel(LOG_CHANNEL_CAPACITY);

@@ -14,7 +14,17 @@
   `page()` and the argv preview's scroll bound
 - `system: SystemInfo` - architecture, optional GPU name, and latest available
   memory sample for the sidebar
+- `tools: Tools` - startup preflight results for `llama-server` and `hf`; the
+  same state gates downloads and supplies the `:about` rows
 - `llama: LauncherState`
+
+## Tool / Tools
+
+`Tool { name, version: Result<String, String> }` records either the first
+non-empty line from `<tool> --version` or the actionable probe error. `Tools`
+holds `llama_server` and `hf`; only the former contributes a
+`required_error()`. The latter's `available()` value is the download capability
+gate.
 
 ## LauncherState
 

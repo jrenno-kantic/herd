@@ -53,8 +53,8 @@ one where letters are shortcuts; every other mode captures text until `Enter` or
   one costs the download
 - `Help` - the `?` reference card for keys; any key dismisses it
 - `Commands` - the `:help` listing of what the command bar accepts
-- `About` - the `:about` dialog: which build this is, and what it is running
-  against
+- `About` - the `:about` dialog: which build this is, machine/config context,
+  and the startup result for `llama-server` and `hf`
 
 `Help`, `Commands` and `About` are three overlays rather than one because they
 answer three different questions — "what does this key do", "what can I type",
@@ -183,6 +183,10 @@ because a section header takes two rows for one item.
   different problem. They attempt first rather than refusing on herd's own
   state, since a server started outside herd is a supported thing to probe
 - Config errors render in the Models screen and never abort the UI
+- Startup checks execute both tools' `--version` commands before entering the
+  alternate screen. Missing/broken `llama-server` exits with a normal terminal
+  error; missing/broken `hf` logs that downloads are disabled, and `d` or a
+  confirmed missing-model launch refuses with the same reason
 - The command bar names what the typed line would run, so a typo reads as
   `unknown` before Enter rather than after it
 - Input is ignored while a command is in flight — except `stop` and `:help`,

@@ -24,14 +24,17 @@ synchronous: it does no I/O and returns an `Action` (`None`, `Quit`,
 `RunCommand`, `ConfigPathChanged`, `RunChat`, `CopyToClipboard`, `DeleteModel`,
 `Download`). Async command work happens in `Executor` tasks; startup hardware
 and lifecycle memory probes are blocking workers started by `main`. Both feed
-results back into the same channel.
+results back into the same channel. External-tool preflight is the deliberate
+exception: it completes before the alternate-screen TUI exists and its result
+is injected into `App`, rather than arriving as an event.
 
-The last four `Action`s are structured rather than string-encoded on purpose: a
+The last five `Action`s are structured rather than string-encoded on purpose: a
 chat prompt is free text that must not be re-parsed out of a command line, a
 config change has to reach the `Executor` so it resolves presets against the
 file the UI is showing, a clipboard payload is a quoted shell line full of the
-characters a parser would choke on, and a download carries a repo reference and
-an "and then launch" flag that have no business being flattened into a string.
+characters a parser would choke on, deletion carries a repo identity rather
+than accepting a path, and a download carries a repo reference and an "and then
+launch" flag that have no business being flattened into a string.
 
 `App::update` never asks the terminal anything — it is *told*. `UiEvent::Resize`
 carries the height so the page keys can move by a real screenful while `update`
@@ -39,8 +42,8 @@ stays pure.
 
 ## Key Modules
 
-- `main.rs` : CLI parsing (`--config`, `--version`), config resolution, event
-  loop (draining before each draw), shutdown
+- `main.rs` : CLI parsing (`--config`, `--version`), external-tool preflight,
+  config resolution, event loop (draining before each draw), shutdown
 - `build.rs` / `version.rs` : stamps each binary with the commit it was built
   from, so builds between releases are distinguishable
 - `keys.rs` : the keymap as data — the single source the footers, the status
@@ -60,8 +63,9 @@ stays pure.
   `session` (remembered tier), `hub` (what is downloaded, what it measures, and
   fetching what is not), `caps` (what a preset is optimised for and what it can
   do)
-- `services/` : clipboard (a platform command, not a crate), scripts, system
-  (bounded shell execution plus hardware and available-memory probes)
+- `services/` : `preflight` (bounded executable/version probes), clipboard (a
+  platform command, not a crate), scripts, system (bounded shell execution plus
+  hardware and available-memory probes)
 - `components/` : read-only renderers over `App` — one per screen
   (`models`, `hub`, `server`, `router`, `test`, `stats`, `settings`, `logs`),
   plus `sidebar`, `command_bar`, `status`, and the overlays — `confirm`
@@ -74,6 +78,14 @@ blocking worker and feeds `UiEvent::SystemInfo` back through the same event
 channel. Each `LlamaStatus` schedules only the cheaper available-memory probe,
 whose result arrives as `UiEvent::AvailableMemory`; rendering never performs
 system I/O.
+
+Before any terminal state is changed, `main` concurrently runs
+`llama-server --version` and `hf --version`, each with a three-second bound.
+Failure to execute `llama-server` aborts with an ordinary terminal error. `hf`
+is capability-scoped: its failure is retained in `App::tools`, logged at
+startup, shown by `:about`, and makes download actions refuse locally; browsing
+and launching already-local models remain available. `--help` and `--version`
+return before this probe because neither operation needs an external tool.
 
 ## Command Dispatch
 

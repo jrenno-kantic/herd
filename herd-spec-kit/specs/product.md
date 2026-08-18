@@ -43,6 +43,8 @@ record of what a project used to be belongs.
 - Read the process output while it runs, scrollable, with a position indicator
 - Ask what can be typed, what a key does, and which build this is, without
   leaving the screen
+- Know at startup that `llama-server` can execute, and see both its version and
+  the `hf` CLI version (or failure) in `:about`
 - Confirm normal quit while a manual model or router process is live, naming
   the serving mode/model and any other work that would be lost; exit directly
   when no supervised server remains
@@ -70,4 +72,7 @@ record of what a project used to be belongs.
   downloader with it
 - Nothing unbounded: every wait on a process has a deadline, so the UI cannot be
   made to hang by a slow kill or a stalled download
+- Degrade by capability: `llama-server` is required, while a missing `hf`
+  disables HERD-managed download actions with an explicit reason but does not
+  make local models unusable
 - Say which build this is: every binary carries the commit it came from

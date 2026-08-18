@@ -1,6 +1,6 @@
 # Roadmap
 
-Status as of 2026-08-17 (herd 0.8.2).
+Status as of 2026-08-18 (herd 0.8.3).
 
 ## Delivered
 
@@ -56,8 +56,10 @@ Status as of 2026-08-17 (herd 0.8.2).
   (`hooks/pre-commit`, installed by `make hooks`)
 - Deleting a cached model (`D` on the Hub screen) behind a prompt that states
   the size and what else in the repo goes with it
-- `:about` — the build stamp and the machine's own facts (config, tier, memory,
-  cache) in one place, rather than spread across four screens
+- `:about` — the build stamp, machine facts and probed external-tool versions
+  (config, tier, memory, cache, llama-server, hf) in one place
+- Startup preflight: `llama-server` is required before the TUI opens; a missing
+  `hf` leaves local launching available while downloads are disabled explicitly
 - A `[mono-focus]` profile: a reserved ini section switched on per preset (`m`
   on Settings) for one client looping on the same base prompt
 - **Fixed:** the session overrides reached the argv *preview* and not the

@@ -305,17 +305,29 @@ de savoir ce que c'est. Quand le port est tenu par son propre enfant supervisé,
 
 ## État de validation
 
-Validation automatisée sur macOS / Apple Silicon le 2026-08-17 :
+Validation automatisée sur macOS / Apple Silicon le 2026-08-18 :
 
 ```
 make verify                  # check, clippy, format, tests, build release
-cargo test                   # 456 tests OK (+14 tests `live`/système ignorés)
+cargo test                   # 460 tests OK (+14 tests `live`/système ignorés)
 ```
 
 Rendu vérifié contre le vrai `~/models/32gb/models.ini` : les 9 presets
 s'affichent avec repo, ctx et mode spéculatif, et l'aperçu argv est correct.
 Endpoints vérifiés contre un vrai llama-server (build 10330) : `/health`
 renvoie bien `200 {"status":"ok"}` et `/v1/models` la forme « models ».
+
+## Interface 0.8.3 (2026-08-18)
+
+- Avant d'entrer dans l'écran alternatif, herd exécute en parallèle
+  `llama-server --version` et `hf --version`, chacun borné à trois secondes.
+- `llama-server` est requis : absent, non exécutable, en échec ou bloqué, il
+  arrête le démarrage avec une erreur dans le terminal normal.
+- `hf` est une capacité optionnelle : son absence laisse la consultation et le
+  lancement des modèles locaux disponibles, mais désactive les téléchargements
+  avec la même raison dans le log et au moment d'appuyer sur `d`.
+- `:about` affiche le résultat de ces deux sondes, version ou erreur, avec les
+  autres éléments utiles à un rapport de bug.
 
 ## Interface 0.8.2 (2026-08-17)
 
@@ -602,20 +614,22 @@ mort il y a une seconde aussi. On tente, puis on explique.
 nom de modèle à envoyer, et la touche renvoyait `None` sans un mot — impossible
 à distinguer d'une touche non liée.
 
-## `:about` (2026-08-12)
+## `:about` (mis à jour le 2026-08-18)
 
 Troisième surimpression locale à côté de `?` (les touches) et `:help` (les
 commandes), pour la troisième question d'un utilisateur bloqué : « qu'est-ce que
 je fais tourner ? ». C'est `--version` à l'écran, plus les faits qui décident du
 comportement sur *cette* machine — `models.ini` chargé, palier, RAM détectée et
-budget qui en découle, répertoire de cache. Tout y est déjà ailleurs (la barre
-latérale a la version, le titre de Models le chemin, l'écran Stats le budget) :
-justement, répondre à cette question ne devrait pas être une visite de quatre
+budget qui en découle, répertoire de cache, puis version ou erreur des sondes
+`llama-server` et `hf`. Les informations de build et de machine sont aussi
+visibles sur leurs écrans respectifs ; les outils viennent du contrôle de
+démarrage. Répondre à cette question ne devrait pas être une visite de quatre
 écrans, et c'est ce qu'un rapport de bug doit contenir.
 
 La ligne « arbre modifié » n'apparaît que lorsqu'elle est vraie. Les chemins sont
-tronqués **par la gauche** : c'est la fin qui identifie un chemin, et une valeur
-coupée par la bordure se lirait comme une valeur qui s'arrête là.
+tronqués **par la gauche** : c'est généralement la fin qui identifie un chemin
+ou une longue version, et une valeur coupée par la bordure se lirait comme une
+valeur qui s'arrête là.
 
 ## Suppression d'un modèle en cache (2026-08-12)
 

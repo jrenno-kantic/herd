@@ -76,6 +76,21 @@ Either llama-server *or* `hf` can be the one downloading — a launch fetches it
 own weights when they are absent — so anything that watches a download has to
 account for both.
 
+## Preflight Service
+
+`services/preflight.rs` executes `llama-server --version` and `hf --version`
+concurrently before the TUI starts. A successful probe retains the first
+non-empty output line; failure distinguishes not-found, execution failure,
+non-zero exit and a three-second timeout. This checks that a tool can actually
+run, not merely that a path with its name exists.
+
+The result is `Tools { llama_server: Tool, hf: Tool }`. `llama-server` is the
+only required tool and prevents startup when unavailable. `hf` is optional:
+its error travels into app state so downloads can refuse with that same reason
+and `:about` can report it. Pure UI constructors use an assumed-available value
+so their tests never depend on the host's `PATH`; production always injects the
+real probe.
+
 ## Clipboard Service
 
 `shell_command` (pure: POSIX single-quote form, a deliberately conservative safe

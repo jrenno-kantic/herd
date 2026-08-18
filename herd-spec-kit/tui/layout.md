@@ -65,8 +65,8 @@ Terminal geometry, built in `layout.rs`.
   too large / not downloaded), the quit confirmation, the `models.ini` picker,
   the `?` key reference, the `:help` command listing and the `:about` dialog.
   The listing sizes itself from its content and elides visibly when the
-  terminal is narrower; the About dialog elides its paths from the *left*,
-  since a path is identified by its end
+  terminal is narrower; the About dialog elides long paths and tool-version
+  results from the *left*, since their identifying detail is at the end
 - The status bar leads with the lifecycle tag, coloured by state, then the model,
   the phase within that state, the elapsed time, endpoint and a hint for the
   current mode

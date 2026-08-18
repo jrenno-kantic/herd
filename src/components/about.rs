@@ -102,6 +102,8 @@ fn lines(app: &App) -> Vec<Line<'static>> {
             None => "no HuggingFace cache on this machine".to_string(),
         },
     ));
+    lines.push(field("llama", app.tools.llama_server.label().to_string()));
+    lines.push(field("hf", app.tools.hf.label().to_string()));
 
     lines.push(Line::from(""));
     lines.push(Line::styled(
@@ -165,6 +167,8 @@ mod tests {
         assert!(text.contains(version::COMMIT), "{text}");
         assert!(text.contains(version::COMMIT_DATE), "{text}");
         assert!(text.contains("/models/32gb/models.ini"), "{text}");
+        assert!(text.contains("llama"), "{text}");
+        assert!(text.contains("hf"), "{text}");
     }
 
     /// The description comes from `Cargo.toml` rather than being written

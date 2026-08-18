@@ -27,7 +27,7 @@ and currently available memory. GPU discovery runs in the background; available
 memory is sampled again whenever llama-server starts, loads, stops, or exits.
 
 ```
-┌HERD 0.8.2────────────┐┌ Models · 32gb · ~/models/32gb/models.ini ────────────────────── 1/8 ┐
+┌HERD 0.8.3────────────┐┌ Models · 32gb · ~/models/32gb/models.ini ────────────────────── 1/8 ┐
 │ ▸ 1 Models           ││   NAME            REPO              RAM     OPT CAPS SPEC   LOCAL   │
 │   2 Server           ││▸★●gemma4-12b      unsloth/gemma-4…  7.3G  qat ud    S  mtp         █│
 │   3 Router           ││  ★gemma4-31b      unsloth/gemma-4…~18.3G  qat ud    S  mtp not local│
@@ -92,11 +92,17 @@ appears once the clipboard has actually taken it; if no clipboard tool answered
 
 ## Run
 
+`llama-server` must be executable on `PATH`; HERD checks it before entering
+the TUI and exits with a direct error when it is unavailable. The `hf` CLI is
+optional: without it, local models can still be browsed and launched, but
+downloads are disabled and the reason is written to the log. `:about` shows
+the detected version (or error) for both tools.
+
 ```bash
 cargo run
 cargo run -- --config ~/models/16gb/models.ini   # pick a specific preset file
 cargo run -- --help
-cargo run -- --version                           # herd 0.8.2 (a1b2c3d 2026-08-17)
+cargo run -- --version                           # herd 0.8.3 (a1b2c3d 2026-08-18)
 ```
 
 ### Running a downloaded macOS binary
@@ -136,27 +142,29 @@ behaves on this machine:
 ```
 ┌ About ─────────────────────────────────────────────────────────┐
 │                                                                │
-│  herd 0.8.2                                                    │
+│  herd 0.8.3                                                    │
 │  Terminal control plane for llama-server                       │
 │                                                                │
-│  build   cd7ed52-dirty · 2026-08-17                            │
+│  build   0f68353-dirty · 2026-08-18                            │
 │                uncommitted changes — not reproducible          │
 │                                                                │
 │  config  …enno/Documents/development/herd/data/32gb/models.ini │
 │  tier    32gb                                                  │
 │  memory  36 GiB installed · 27.0 GiB for models                │
 │  cache   /Users/jrenno/.cache/huggingface/hub                  │
+│  llama   version: 0.1.0-dev (build 10450, commit ece963f41)    │
+│  hf      1.27.0                                                │
 │                                                                │
 │  esc close · ? keys · :help commands                           │
 └────────────────────────────────────────────────────────────────┘
 ```
 
-Every line of it is already somewhere — the sidebar has the version, the Models
-title has the path, the Stats screen has the budget — and that is the point:
-answering "what am I running?" should not be a tour of four screens. It is what
-a bug report needs, in one place, and the dirty-tree line only appears when it
-is true. Long paths are elided from the *left*, since the end of a path is what
-identifies it.
+The build and machine lines are also visible on their own screens; the tool
+versions are the result of the startup preflight. Collecting them here means
+answering "what am I running?" is not a tour of four screens. It is what a bug
+report needs, in one place, and the dirty-tree line only appears when it is
+true. Long values are elided from the *left*, since the identifying part of a
+path or version is usually at its end.
 
 ## Keybindings
 

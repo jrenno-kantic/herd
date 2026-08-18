@@ -10,6 +10,7 @@ use crate::services::llama::{
     prefs::{self, Prefs, RouterPrefs},
     Budget, Fit, LauncherMode, Overrides, Phase, ServerState, Tier,
 };
+use crate::services::preflight::Tools;
 use chrono::{DateTime, Local};
 use crossterm::event::{KeyCode, KeyEvent};
 use std::collections::{BTreeSet, VecDeque};
@@ -1272,6 +1273,9 @@ pub struct App {
     /// has to know: how many lines of the argv preview its pane hides.
     pub cols: u16,
     pub system: crate::services::system::SystemInfo,
+    /// External programs probed before the production TUI starts. Kept in
+    /// state so capability gates and `:about` report the same answer.
+    pub tools: Tools,
     pub llama: LauncherState,
 }
 
@@ -1307,8 +1311,21 @@ impl App {
     /// `~/.herd_config` remembers about favourites, overrides and the
     /// router.
     pub fn restored(config_path: PathBuf, last_launched: Option<String>, prefs: Prefs) -> Self {
+        Self::restored_with_tools(config_path, last_launched, prefs, Tools::assumed())
+    }
+
+    pub fn restored_with_tools(
+        config_path: PathBuf,
+        last_launched: Option<String>,
+        prefs: Prefs,
+        tools: Tools,
+    ) -> Self {
         let mut logs = VecDeque::with_capacity(MAX_LOGS);
         logs.push_back("HERD started".into());
+
+        if let Err(error) = &tools.hf.version {
+            logs.push_back(format!("downloads disabled: {error}"));
+        }
 
         Self {
             command_input: String::new(),
@@ -1320,6 +1337,7 @@ impl App {
             rows: DEFAULT_ROWS,
             cols: DEFAULT_COLS,
             system: crate::services::system::SystemInfo::default(),
+            tools,
             llama: LauncherState::new(config_path, last_launched, prefs),
         }
     }
@@ -2528,6 +2546,14 @@ impl App {
     /// One download at a time: two `hf` processes writing into the same
     /// cache is a fight nobody needs, and the screen has one bar.
     fn start_download(&mut self, model: String, repo: String, then_launch: bool) -> Action {
+        if !self.tools.hf.available() {
+            self.push_log(format!(
+                "cannot download {model}: {}",
+                self.tools.hf.label()
+            ));
+            return Action::None;
+        }
+
         if let Some(running) = &self.llama.download {
             self.push_log(format!(
                 "already downloading {}, wait for it to finish",
@@ -5014,6 +5040,20 @@ hf-repo = unsloth/gemma-4-12B-it-qat-GGUF:UD-Q4_K_XL
             }
             other => panic!("expected a download, got {other:?}"),
         }
+    }
+
+    #[test]
+    fn a_missing_hf_disables_downloads_without_disabling_the_app() {
+        let mut app = app_with_sample();
+        app.tools.hf.version = Err("`hf` was not found on PATH".into());
+        app.update(UiEvent::CacheList(vec![]));
+
+        assert!(matches!(app.update(ch('d')), Action::None));
+        assert!(app.llama.download.is_none());
+        assert!(app
+            .logs
+            .back()
+            .is_some_and(|line| line.contains("cannot download gemma4-12b")));
     }
 
     #[test]
