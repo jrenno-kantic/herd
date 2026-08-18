@@ -62,6 +62,8 @@ Status as of 2026-08-18 (herd 0.8.7).
   `hf` leaves local launching available while downloads are disabled explicitly
 - Public Homebrew distribution through `jrenno-kantic/tap/herd-llm`, with
   `llama.cpp` and `hf` declared as runtime dependencies and tap-native CI
+- dist 0.32.0 release automation, validated by the `v0.8.8-rc.2` three-platform
+  prerelease without displacing the stable Homebrew formula
 - A `[mono-focus]` profile: a reserved ini section switched on per preset (`m`
   on Settings) for one client looping on the same base prompt
 - **Fixed:** the session overrides reached the argv *preview* and not the
@@ -75,11 +77,10 @@ Status as of 2026-08-18 (herd 0.8.7).
 
 ## Next
 
-Adopt dist (formerly cargo-dist) as the release and Homebrew packaging helper,
-following `distribution.md`: generate per-platform release archives and the
-`herd-llm` formula, configure a tap-scoped `HOMEBREW_TAP_TOKEN`, retain runtime
-dependencies on `llama.cpp` and `hf`, and switch away from the working source
-formula only after the generated formula passes the full acceptance checks.
+Publish the first stable dist-managed release and let the tap's Homebrew CI
+validate the generated prebuilt `herd-llm` formula before retiring the working
+source formula as the active path. The rollback and acceptance checks remain in
+`distribution.md`.
 
 `TODO.md` currently has no other outstanding tasks. Longer-term candidates
 remain in `doc/PROMPT_NEXT_STEPS.md` (French): auto-restart on

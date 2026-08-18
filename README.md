@@ -913,18 +913,20 @@ It refuses on a dirty tree — a release has to be reproducible from its tag.
 Because the release commit sets the version itself, the hook leaves it alone,
 so a `make release-minor` really does land as `0.9.0` and not `0.9.1`.
 
-The `vX.Y.Z` tag is also the release-automation boundary. The current Homebrew
-formula builds that tagged source. The planned distribution pipeline uses
+The `vX.Y.Z` tag is also the release-automation boundary. The current stable
+Homebrew formula builds the tagged source. Release automation uses
 [`dist` (formerly cargo-dist)](https://axodotdev.github.io/cargo-dist/) to build
 versioned macOS and Linux archives, attach them to the GitHub release, and
 publish a generated `herd-llm` formula to the existing tap. This will remove
 Rust from the end-user installation path while keeping `llama.cpp` and `hf` as
-runtime formula dependencies.
+runtime formula dependencies on the next stable release.
 
-That migration is not active until its generated workflow has been reviewed,
-`HOMEBREW_TAP_TOKEN` has been configured on the HERD repository, and the
-generated formula passes `brew style`, `brew audit`, installation, and
-`herd --version` tests. The detailed contract and rollout are recorded in
+The generated workflow and `HOMEBREW_TAP_TOKEN` are configured. The
+`v0.8.8-rc.2` prerelease validated all three target builds, checksums, release
+assembly, formula generation, and the packaged binary's build stamp; as
+intended, it did not replace the stable formula. Tap publication and its native
+Homebrew CI are exercised by the next stable tag. The detailed contract and
+rollout are recorded in
 [`herd-spec-kit/specs/distribution.md`](herd-spec-kit/specs/distribution.md).
 
 ## License

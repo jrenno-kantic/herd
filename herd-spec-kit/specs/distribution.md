@@ -22,7 +22,7 @@ Its formula downloads the tagged HERD source and builds it with Cargo. This is
 the working fallback and remains authoritative until the prebuilt pipeline has
 completed the acceptance checks below.
 
-## Target implementation: dist
+## Active release implementation: dist
 
 Use [`dist`](https://axodotdev.github.io/cargo-dist/) (formerly cargo-dist) as
 the release and Homebrew packaging helper. It is a good fit because it builds
@@ -31,6 +31,21 @@ downloads those archives, and can publish that formula to the existing tap.
 It does not generate source-building Homebrew formulae, so this is a deliberate
 migration to prebuilt artifacts rather than a transparent refactor of the
 current formula.
+
+## Rollout status
+
+- `dist` 0.32.0 configuration and generated GitHub release CI are checked in.
+- `HOMEBREW_TAP_TOKEN` is configured on the HERD repository.
+- `v0.8.8-rc.2` successfully built and published checksummed archives for
+  Apple Silicon macOS, Intel macOS, and x86_64 Linux.
+- The downloaded Apple Silicon artifact reports
+  `herd 0.8.8-rc.2 (bbd51e3 2026-08-18)`.
+- The generated formula is named `herd-llm` and declares `hf` and `llama.cpp`.
+- Prerelease Homebrew publication was skipped, proving that the stable `0.8.7`
+  source formula remains unchanged.
+- The next stable tag performs the first automated tap update and tap-native
+  Homebrew validation. Until that succeeds, the source formula is the rollback
+  path.
 
 The intended generated configuration is equivalent to:
 
