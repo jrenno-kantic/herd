@@ -62,14 +62,16 @@ stays pure.
   favourites, overrides, router numbers), `memory` (preset sizing + budget),
   `session` (remembered tier), `hub` (what is downloaded, what it measures, and
   fetching what is not), `caps` (what a preset is optimised for and what it can
-  do)
+  do), `opencode` (the `opencode.json` provider block for a preset, read off
+  the launch argv)
 - `services/` : `preflight` (bounded executable/version probes), clipboard (a
   platform command, not a crate), scripts, system (bounded shell execution plus
   hardware and available-memory probes)
 - `components/` : read-only renderers over `App` — one per screen
   (`models`, `hub`, `server`, `router`, `test`, `stats`, `settings`, `logs`),
   plus `sidebar`, `command_bar`, `status`, and the overlays — `confirm`
-  (launch, quit and delete), `picker`, `help`, `command_help` and `about`
+  (launch, quit and delete), `picker`, `help`, `command_help`, `about` and
+  `opencode`
 - `layout.rs`, `theme.rs` : geometry and styles
 - `hooks/pre-commit` : bumps the patch version on every commit (`make hooks`)
 
@@ -80,7 +82,13 @@ whose result arrives as `UiEvent::AvailableMemory`; rendering never performs
 system I/O.
 
 Before any terminal state is changed, `main` concurrently runs
-`llama-server --version` and `hf --version`, each with a three-second bound.
+`llama-server --version` and `hf --version`, each with a fifteen-second bound.
+The probes run at the same time, so that is the worst case for start-up as a
+whole rather than per tool, and a tool that is simply absent never reaches the
+timeout — it fails on `spawn`. The bound is generous because both are slow for
+real reasons on a cold machine (backend initialisation, Python start-up) and
+both failure modes are expensive: `llama-server` is required, and a false
+timeout on `hf` disables downloads for the whole session.
 Failure to execute `llama-server` aborts with an ordinary terminal error. `hf`
 is capability-scoped: its failure is retained in `App::tools`, logged at
 startup, shown by `:about`, and makes download actions refuse locally; browsing
@@ -149,7 +157,8 @@ drives every entry:
 `app.rs` owns a `Screen` (which view is up) and a `Mode` (what a keystroke
 means). Only `Browse` treats letters as shortcuts; `Command`, `Filter`,
 `EditSetting`, `EditPrompt`, `Picker`, `ConfirmLaunch`, `ConfirmQuit`,
-`ConfirmDelete`, `Help`, `Commands` and `About` capture input until answered.
+`ConfirmDelete`, `Help`, `Commands`, `About` and `OpenCode` capture input until
+answered.
 New shortcuts belong inside a mode, never globally, or they shadow text entry.
 
 Screen digits are positional, so inserting a screen renumbers the rest. Tests

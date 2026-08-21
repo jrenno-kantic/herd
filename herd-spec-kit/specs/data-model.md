@@ -4,12 +4,16 @@
 
 - `command_input: String`
 - `screen: Screen` - `Models` | `Hub` | `Server` | `Router` | `Test` | `Stats` | `Settings` | `Logs`
-- `mode: Mode` - `Browse` | `Command` | `Filter` | `EditSetting` | `EditPrompt` | `Picker` | `ConfirmLaunch` | `ConfirmQuit` | `ConfirmDelete` | `Help` | `Commands` | `About`
+- `mode: Mode` - `Browse` | `Command` | `Filter` | `EditSetting` | `EditPrompt` | `Picker` | `ConfirmLaunch` | `ConfirmQuit` | `ConfirmDelete` | `Help` | `Commands` | `About` | `OpenCode`
 - `logs: VecDeque<String>` - capped at 500 entries, oldest dropped first
 - `log_scroll: usize` - lines hidden *below* the viewport, so 0 means "follow
   the newest line" and no separate follow flag is needed
 - `running: bool` - a command is in flight; input is ignored while true, except
   for `stop`, which is the one command needed when something else is wedged
+- `in_flight() -> Vec<String>` (derived) - everything quitting right now would
+  interrupt, each named: the download, a waiting chat probe, a running command.
+  A live server is deliberately **not** in it — stopping it on exit is what
+  happens every time, so `q` asks about it without listing it as work lost
 - `rows: u16`, `cols: u16` - last terminal size, from `UiEvent::Resize`; drive
   `page()` and the argv preview's scroll bound
 - `system: SystemInfo` - architecture, optional GPU name, and latest available
@@ -240,7 +244,7 @@ machine you are on right now, not a preset setting.
 ## Shipped preset data (`data/`)
 
 An in-repo snapshot of the user's `~/models/` tiers: `16gb/models.ini`
-(13 presets) and `32gb/models.ini` (9 presets), plus the original
+(14 presets) and `32gb/models.ini` (10 presets), plus the original
 `llama-launch.js`, `test_call.sh` and `start-router.sh`.
 
 Reference and **test fixture only** - config resolution reads `~/models/`, never

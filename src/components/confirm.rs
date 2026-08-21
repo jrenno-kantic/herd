@@ -26,6 +26,24 @@ use ratatui::Frame;
 /// Separate from the launch prompt because it answers a different question
 /// and lists live state rather than a static reason.
 pub fn render_quit(frame: &mut Frame, app: &App, area: Rect) {
+    let lines = quit_lines(app);
+    let popup = centered(area, 68, (lines.len() + 2) as u16);
+
+    frame.render_widget(Clear, popup);
+    frame.render_widget(
+        Paragraph::new(lines).style(Theme::normal()).block(
+            Block::default()
+                .title(" Confirm quit ")
+                .borders(Borders::ALL)
+                .border_style(Theme::status_error()),
+        ),
+        popup,
+    );
+}
+
+/// The prompt's text, apart from the drawing of it, so what it says can be
+/// asserted on without a terminal — the same split as `about::lines`.
+fn quit_lines(app: &App) -> Vec<Line<'static>> {
     let work = app.in_flight();
     let server_live = app.llama.server.state.is_live();
     let mut lines = vec![
@@ -43,6 +61,17 @@ pub fn render_quit(frame: &mut Frame, app: &App, area: Rect) {
         for item in &work {
             lines.push(Line::styled(format!("    · {item}"), Theme::normal()));
         }
+        // Said only when there is a download, and said because it is
+        // true: `hf` writes into a `.incomplete` blob and picks up from
+        // it, so this one item on the list is the recoverable one. A
+        // prompt that let the user believe six gigabytes were about to be
+        // thrown away would be scaring them into the wrong answer.
+        if app.llama.download.is_some() {
+            lines.push(Line::styled(
+                "    the download resumes from where it stopped".to_string(),
+                Theme::logs(),
+            ));
+        }
     }
     lines.push(Line::from(""));
     lines.push(Line::styled(
@@ -59,18 +88,7 @@ pub fn render_quit(frame: &mut Frame, app: &App, area: Rect) {
         Theme::normal(),
     ));
 
-    let popup = centered(area, 68, (lines.len() + 2) as u16);
-
-    frame.render_widget(Clear, popup);
-    frame.render_widget(
-        Paragraph::new(lines).style(Theme::normal()).block(
-            Block::default()
-                .title(" Confirm quit ")
-                .borders(Borders::ALL)
-                .border_style(Theme::status_error()),
-        ),
-        popup,
-    );
+    lines
 }
 
 /// Human-facing state for the quit decision.
@@ -254,6 +272,20 @@ mod tests {
     use super::*;
     use std::path::PathBuf;
 
+    /// The prompt as one blob of text, spans flattened.
+    fn quit_text(app: &App) -> String {
+        quit_lines(app)
+            .iter()
+            .map(|line| {
+                line.spans
+                    .iter()
+                    .map(|span| span.content.clone())
+                    .collect::<String>()
+            })
+            .collect::<Vec<_>>()
+            .join("\n")
+    }
+
     fn app_with_server(state: ServerState, mode: LauncherMode, model: Option<&str>) -> App {
         let mut app = App::with_config_path(PathBuf::from("missing-models.ini"));
         app.llama.server.state = state;
@@ -286,6 +318,39 @@ mod tests {
             serving_summary(&router),
             "Router mode is active; it can keep up to 3 models loaded."
         );
+    }
+
+    /// The list is honest in both directions: a download is named as
+    /// work at stake, and named as the one item that comes back.
+    #[test]
+    fn a_download_is_listed_and_said_to_be_resumable() {
+        let mut app = app_with_server(ServerState::Off, LauncherMode::Idle, None);
+        app.llama.download = Some(crate::app::Download {
+            model: "gemma4-12b".into(),
+            done: 2_000_000_000,
+            total: 6_400_000_000,
+        });
+
+        let text = quit_text(&app);
+        assert!(text.contains("gemma4-12b"), "{text}");
+        assert!(text.contains("resumes"), "{text}");
+        assert!(
+            text.contains("No supervised server"),
+            "nothing is serving, and the prompt should say so: {text}"
+        );
+    }
+
+    /// Nothing to resume, nothing said about resuming.
+    #[test]
+    fn a_prompt_with_no_download_says_nothing_about_resuming() {
+        let app = app_with_server(
+            ServerState::Serving,
+            LauncherMode::Manual,
+            Some("gemma4-12b"),
+        );
+
+        let text = quit_text(&app);
+        assert!(!text.contains("resumes"), "{text}");
     }
 
     #[test]

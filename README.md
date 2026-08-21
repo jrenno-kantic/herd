@@ -8,7 +8,7 @@ It is a Rust port and expansion of the `llama-launch.js` idea: that script resol
 
 | | Screen | What it does |
 |---|---|---|
-| `1` | **Models** | The presets in the active `models.ini`, with repo, context size, memory size, optimisations, capabilities, speculative head and whether the weights are on this machine. Launch with `Enter`, download with `d`, star with `f`, copy the launch command with `y`. The active preset is marked `●` serving, `◐` starting or stopping, `✖` failed. |
+| `1` | **Models** | The presets in the active `models.ini`, with repo, context size, memory size, optimisations, capabilities, speculative head and whether the weights are on this machine. Launch with `Enter`, download with `d`, star with `f`, copy the launch command with `y`, and get the OpenCode provider config with `o`. The active preset is marked `●` serving, `◐` starting or stopping, `✖` failed. |
 | `2` | **Server** | Lifecycle state, model, endpoint, uptime, and the tail of the process output. |
 | `3` | **Router** | llama-server's built-in multi-model mode: how many models stay resident, how long an idle one survives, and the argv that starts it. |
 | `4` | **Test** | Send a chat completion to the running model and see the reply, when it was sent, the latency, token rate, and llama.cpp's own split of prompt-eval vs generation. |
@@ -27,7 +27,7 @@ and currently available memory. GPU discovery runs in the background; available
 memory is sampled again whenever llama-server starts, loads, stops, or exits.
 
 ```
-┌HERD 0.8.8-rc.4───────┐┌ Models · 32gb · ~/models/32gb/models.ini ────────────────────── 1/8 ┐
+┌HERD 0.8.9────────────┐┌ Models · 32gb · ~/models/32gb/models.ini ────────────────────── 1/8 ┐
 │ ▸ 1 Models           ││   NAME            REPO              RAM     OPT CAPS SPEC   LOCAL   │
 │   2 Server           ││▸★●gemma4-12b      unsloth/gemma-4…  7.3G  qat ud    S  mtp         █│
 │   3 Router           ││  ★gemma4-31b      unsloth/gemma-4…~18.3G  qat ud    S  mtp not local│
@@ -98,6 +98,13 @@ optional: without it, local models can still be browsed and launched, but
 downloads are disabled and the reason is written to the log. `:about` shows
 the detected version (or error) for both tools.
 
+The check runs both `--version` probes concurrently with a **15-second** bound
+each, so that is the worst case for start-up as a whole rather than per tool. A
+tool that is simply absent fails instantly — it fails on `spawn`, not on the
+timeout — so the bound only ever waits on a binary that is there and slow, which
+both of these are on a cold machine: `llama-server` initialises its backends,
+and `hf` is a Python entry point.
+
 ### Homebrew
 
 The supported Homebrew formula installs HERD together with `llama.cpp`
@@ -119,7 +126,7 @@ The formula is named `herd-llm` to avoid ambiguity; the installed executable is
 cargo run
 cargo run -- --config ~/models/16gb/models.ini   # pick a specific preset file
 cargo run -- --help
-cargo run -- --version                           # herd 0.8.8-rc.4 (a1b2c3d 2026-08-18)
+cargo run -- --version                           # herd 0.8.9 (a1b2c3d 2026-08-21)
 ```
 
 ### Running a downloaded macOS binary
@@ -159,7 +166,7 @@ behaves on this machine:
 ```
 ┌ About ─────────────────────────────────────────────────────────┐
 │                                                                │
-│  herd 0.8.8-rc.4                                               │
+│  herd 0.8.9                                                    │
 │  Terminal control plane for llama-server                       │
 │                                                                │
 │  build   0f68353-dirty · 2026-08-18                            │
@@ -194,7 +201,7 @@ Global:
 | `Tab` / `Shift-Tab`, or `→` / `←` | cycle screens |
 | `:` | command bar (power-user escape hatch) — `:help` lists what it accepts |
 | `?` | key reference |
-| `q` | quit; asks first while a manual model or router process is active |
+| `q` | quit; asks first while a server is up, or while a download, probe or command is in flight |
 | `Q` | quit at once, abandoning it |
 
 Models screen:
@@ -208,6 +215,7 @@ Models screen:
 | `d` | download it without launching |
 | `f` | star it, or take the star off |
 | `y` | copy the launch command to the clipboard, quoted and ready to paste |
+| `o` | show the [OpenCode provider config](#pointing-opencode-at-a-preset) for this preset |
 | `J` / `K` | scroll the argv preview, when the command is taller than its pane |
 | `s` | stop the running server, or clear a failed launch |
 | `/` | filter by name or repo (`Enter` keeps it, `Esc` clears it) |
@@ -396,6 +404,82 @@ Two deliberate omissions worth knowing:
   saying so in its name and reads as text-only. That is the right direction to
   be wrong in.
 
+## Pointing OpenCode at a preset
+
+`o` on the Models screen shows the [OpenCode](https://opencode.ai) provider
+block for the highlighted preset. `y` copies it and closes the overlay; any
+other key just closes it.
+
+```
+┌ OpenCode provider ───────────────────────────────────────────┐
+│                                                              │
+│  add to ~/.config/opencode/opencode.json                     │
+│  — merge into an existing "provider" block                   │
+│                                                              │
+│  {                                                           │
+│    "$schema": "https://opencode.ai/config.json",             │
+│    "provider": {                                             │
+│      "herd": {                                               │
+│        "npm": "@ai-sdk/openai-compatible",                   │
+│        "name": "herd (llama-server)",                        │
+│        "options": { "baseURL": "http://127.0.0.1:1234/v1" }, │
+│        "models": {                                           │
+│          "gemma4-12b": {                                     │
+│            "name": "gemma4-12b",                             │
+│            "tool_call": true,                                │
+│            "reasoning": false,                               │
+│            "limit": { "context": 32768, "output": 32768 }    │
+│          }                                                   │
+│        }                                                     │
+│      }                                                       │
+│    }                                                         │
+│  }                                                           │
+│                                                              │
+│  y copy and close · any other key close                      │
+└──────────────────────────────────────────────────────────────┘
+```
+
+OpenCode reaches a local model through a custom provider backed by
+`@ai-sdk/openai-compatible`, pointed at an OpenAI-compatible `/v1` endpoint —
+which is what `llama-server` serves. Everything that block needs is already on
+this screen, and writing it out by hand means reading a port off one pane and an
+alias off another, which is where the typo that makes OpenCode talk to nothing
+comes from.
+
+**It is built from the launch argv, not from the ini directly** — the same
+source `y` copies its shell command from. The argv is where
+`[server] → [*] → [model] → mono-focus → overrides → CLI` has already been
+resolved, so a context size you changed on the Settings screen reaches this
+block exactly as it reaches the process.
+
+The model id is the preset's **`--alias`**, not its section name, because the
+alias is what `llama-server` answers to at `/v1/models`. In both shipped tiers
+they are the same string; in an ini where they are not, the alias is the half
+that works.
+
+Every field is something the preset actually says, and a field HERD cannot
+support is **left out rather than guessed**, so OpenCode falls back to its own
+default instead of acting on a confident wrong answer:
+
+| Field | Set when |
+|---|---|
+| `tool_call` | `--jinja` is in the argv — jinja templating is what makes llama-server parse a model's tool-call syntax into OpenAI tool calls, and without it a coding agent cannot use a single tool |
+| `reasoning` | `--reasoning` / `--reasoning-format` is set; `off` and `none` are `false`, anything else is `true` |
+| `attachment` | the preset has vision **switched on**, read from the same detection as the `CAPS` column — which [under-claims rather than over-claims](#what-a-preset-is-and-what-it-can-do), the right direction here too |
+| `limit` | `--ctx-size` is known. `output` is `--n-predict` where the preset caps it, and the context size where it does not, since llama-server's own default is to generate until the context is full |
+
+Pasting two of these merges by hand cleanly: `models` is a map, so a second
+preset is one more entry rather than a second provider block.
+
+**HERD does not write `~/.config/opencode/opencode.json`.** It is
+hand-maintained, it belongs to another program, and rewriting it would lose its
+comments and key order — the same rule that keeps
+[`models.ini` untouched](#settings-and-overrides).
+
+On a terminal too short to draw the block whole, the box says how many rows it
+would need rather than showing an opening brace and running out. `y` still
+copies the whole thing.
+
 ## Testing the running model
 
 The Test screen is `data/scripts/test_call.sh` as a screen: the same system
@@ -526,9 +610,9 @@ count and how many of them exceed the current budget:
 ```
 ┌ Select models.ini ─────────────────────────────────────────────────┐
 │  budget 12.0 GiB usable of 16 GiB installed                        │
-│   16gb      13 presets                                             │
+│   16gb      14 presets                                             │
 │     ~/models/16gb/models.ini                                       │
-│ ▸• 32gb       9 presets  ⚠ 5 exceed this machine                   │
+│ ▸• 32gb      10 presets  ⚠ 5 exceed this machine                   │
 │     ~/models/32gb/models.ini                                       │
 │                                                                    │
 │  enter select · up/down move · esc cancel                          │
@@ -590,8 +674,9 @@ OFF ──launch──> STARTING ──/health 200──> SERVING ──stop─�
 **STARTING can legitimately last a while.** A preset whose GGUF is not cached yet downloads it first, so the first launch of a 30B model is minutes, not seconds. Watch the Server screen or the Logs: llama-server reports download and load progress there. If nothing is serving after 10 minutes the state becomes `ERROR` rather than hanging forever.
 
 Quitting always stops the supervised process, so no orphaned server keeps holding GPU memory.
-Lowercase `q` opens a confirmation while a supervised server is live and exits
-directly otherwise; uppercase `Q` remains the explicit immediate-exit shortcut.
+Lowercase `q` opens a confirmation while a supervised server is live, and also
+while a download, a probe or a command is in flight; with neither it exits
+directly. Uppercase `Q` remains the explicit immediate-exit shortcut.
 
 ## Settings and overrides
 
@@ -701,11 +786,13 @@ The repo carries a snapshot of the preset tiers in `data/`:
 
 ```
 data/
-├── 16gb/models.ini      13 presets, 4B–27B: Qwen 3.5 4B/9B (±MTP), Gemma 4 E4B,
-│                        Qwen3 4B, Gemma 3 4B, Phi-4 Mini, Nemotron 3 Nano 4B,
-│                        Gemma 4 12B, Qwen3-VL 8B, Qwen3 14B, Bonsai 27B
-├── 32gb/models.ini       9 presets, 12B–35B: Gemma 4 12B/26B/31B, Qwen 3.6 27B/35B,
-│                        Qwen 3.8 27B, Qwen3 Coder 30B, Qwen3-VL 8B, Qwen3 14B
+├── 16gb/models.ini      14 presets, 4B–27B: Qwen 3.5 4B/9B (±MTP), Qwen 3.8 27B,
+│                        Gemma 4 E4B, Qwen3 4B, Gemma 3 4B, Phi-4 Mini,
+│                        Nemotron 3 Nano 4B, Gemma 4 12B, Qwen3-VL 8B,
+│                        Qwen3 14B, Bonsai 27B
+├── 32gb/models.ini      10 presets, 12B–35B: Gemma 4 12B/26B/31B, Qwen 3.6 27B/35B,
+│                        Huihui Qwen 3.6 35B A3B abliterated, Qwen 3.8 27B,
+│                        Qwen3 Coder 30B, Qwen3-VL 8B, Qwen3 14B
 ├── scripts/llama-launch.js
 ├── scripts/test_call.sh
 └── start-router.sh
@@ -852,12 +939,21 @@ about the llama-server build actually installed.
 
 ## Quitting
 
-`q` asks only while HERD supervises a live manual-model or router process,
-including its starting and stopping transitions. With no live server it exits
-directly. The dialog says what HERD is serving, then names any download, probe,
-or command that would also be abandoned. Manual mode names the exact model;
-router mode reports its configured resident limit because HERD does not receive
-an exact loaded-model count from llama-server.
+`q` asks in two cases, and they are separate on purpose:
+
+- **A supervised server is live** — a manual model or a router process,
+  including its starting and stopping transitions.
+- **Something is in flight** that quitting would interrupt: a download, a chat
+  probe, or a command still running.
+
+With neither, it exits directly. The dialog says what HERD is serving, then
+names anything else at stake. Manual mode names the exact model; router mode
+reports its configured resident limit because HERD does not receive an exact
+loaded-model count from llama-server.
+
+A live server is asked about but never *listed*, because it is not work that
+would be lost — stopping it on exit is what happens every time, and asking
+about the normal case would train you to dismiss the prompt unread.
 
 ```
 ┌ Confirm quit ────────────────────────────────────────────────────┐
@@ -866,15 +962,21 @@ an exact loaded-model count from llama-server.
 │                                                                  │
 │  Quitting now would also abandon:                                │
 │    · downloading gemma4-31b (2.1G of 6.7G · 31%)                 │
+│    the download resumes from where it stopped                    │
 │                                                                  │
 │  The supervised server will be stopped on exit.                  │
 │  Confirm quit?   [y] yes   [any other key] stay                  │
 └──────────────────────────────────────────────────────────────────┘
 ```
 
-Starting and stopping states have distinct text. Failed and idle states do not
-prompt because no supervised process remains to stop. `Q` always skips the
-question.
+The resume line appears only when a download is what is at stake, and it is
+true: `hf` writes into a `.incomplete` blob and picks up from it next time. A
+prompt that let you believe six gigabytes were about to be thrown away would be
+scaring you into the wrong answer.
+
+Starting and stopping states have distinct text. A failed server does not
+prompt on its own, since no supervised process remains to stop. `Q` always
+skips the question.
 
 Shutdown stops the downloader as well as the server, and every step is bounded:
 SIGTERM, then SIGKILL, then giving up. A kill that takes twenty seconds cannot
@@ -942,6 +1044,7 @@ HERD is distributed under the [MIT License](LICENSE).
 
 ## Behavior notes
 
+- Files that belong to another program are never written: not `models.ini`, and not `~/.config/opencode/opencode.json`. What HERD has to offer for either goes to the clipboard, where you decide where it lands.
 - Logs are capped at 500 entries; multi-line output is split into separate entries before the cap is applied.
 - `sh <command>` is bounded by a 30s timeout; failures show `exit <code>: <stderr>` or `timeout after 30s`.
 - If a command task panics or is cancelled, the UI still receives a `task aborted` completion so the prompt never gets stuck.

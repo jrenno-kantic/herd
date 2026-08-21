@@ -18,6 +18,7 @@ pub mod caps;
 pub mod hub;
 pub mod ini;
 pub mod memory;
+pub mod opencode;
 pub mod overrides;
 pub mod prefs;
 pub mod process;

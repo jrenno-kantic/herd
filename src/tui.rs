@@ -1,8 +1,8 @@
 use crate::{
     app::{App, Mode, Screen},
     components::{
-        about, command_bar, command_help, confirm, help, hub, logs, models, picker, router, server,
-        settings, sidebar, stats, status, test,
+        about, command_bar, command_help, confirm, help, hub, logs, models, opencode, picker,
+        router, server, settings, sidebar, stats, status, test,
     },
     layout,
     theme::Theme,
@@ -83,6 +83,9 @@ pub fn render(frame: &mut Frame, app: &App) {
     }
     if app.mode == Mode::About {
         about::render(frame, app, frame.area());
+    }
+    if app.mode == Mode::OpenCode {
+        opencode::render(frame, app, frame.area());
     }
 }
 
@@ -664,6 +667,35 @@ spec-type = draft-mtp
         assert!(text.contains("GiB"), "no memory line: {text}");
     }
 
+    /// `o` on the Models screen answers the question the argv preview
+    /// does not: how to point an editor at the preset once it is up.
+    #[test]
+    fn the_opencode_overlay_shows_the_provider_block_for_the_selected_preset() {
+        let mut app = sample_app();
+        app.screen = Screen::Models;
+        app.mode = Mode::OpenCode;
+
+        let text = frame_text(&app, 120, 40);
+        assert!(text.contains("OpenCode provider"), "{text}");
+        assert!(text.contains("opencode.json"), "no path: {text}");
+        assert!(
+            text.contains("@ai-sdk/openai-compatible"),
+            "no npm package: {text}"
+        );
+        assert!(text.contains("/v1"), "no endpoint: {text}");
+        assert!(text.contains("y copy"), "no copy hint: {text}");
+        // The whole block is there, closing braces included — an overlay
+        // that ran off the bottom would still show its opening lines.
+        // (Elision is checked in `components::opencode`, against the
+        // overlay's own text: the Models table drawn *behind* it has an
+        // ellipsis of its own in the repo column.)
+        assert!(
+            text.contains("\"models\": {"),
+            "the block is cut before the model: {text}"
+        );
+        assert!(text.contains("\"tool_call\": true"), "no tool_call: {text}");
+    }
+
     /// The one destructive prompt in the program has to say what goes,
     /// how much of it, and that there is no way back.
     #[test]
@@ -1066,6 +1098,7 @@ spec-type = draft-mtp
             Mode::ConfirmLaunch,
             Mode::ConfirmDelete,
             Mode::About,
+            Mode::OpenCode,
         ] {
             app.mode = mode;
             let _ = frame_text(&app, 20, 6);

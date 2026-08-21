@@ -39,15 +39,18 @@ record of what a project used to be belongs.
 - Star the presets worth coming back to, and keep them across restarts
 - Override a server or model option, kept in `~/.herd_config`
 - Override the share of memory reserved for the OS, with a standing caution
-- Copy the exact launch command, or a models.ini stanza, to the clipboard
+- Copy the exact launch command, a models.ini stanza, or an `opencode.json`
+  provider block, to the clipboard
 - Read the process output while it runs, scrollable, with a position indicator
 - Ask what can be typed, what a key does, and which build this is, without
   leaving the screen
 - Know at startup that `llama-server` can execute, and see both its version and
   the `hf` CLI version (or failure) in `:about`
-- Confirm normal quit while a manual model or router process is live, naming
-  the serving mode/model and any other work that would be lost; exit directly
-  when no supervised server remains
+- Point an editor at a preset: `o` on the Models screen shows the OpenCode
+  provider block for it, built from the argv a launch would really spawn
+- Confirm normal quit while a manual model or router process is live, or while
+  a download, probe or command is in flight, naming the serving mode/model and
+  the work that would be interrupted; exit directly when there is neither
 
 ## Design Principles
 
@@ -55,7 +58,10 @@ record of what a project used to be belongs.
   bar stays as a power-user escape hatch, not the primary path
 - Trustworthy state: the lifecycle shown is confirmed by `/health`, not guessed
   from log wording
-- The user's files are theirs: `models.ini` is never written to
+- The user's files are theirs: `models.ini` is never written to, and neither is
+  `~/.config/opencode/opencode.json`. Both are hand-maintained, both belong to
+  someone else, and no round-tripper preserves their comments and key order —
+  so what herd has to offer goes to the clipboard instead
 - Destructive acts are the user's call: herd never kills a process it did not
   spawn, and never changes a system setting. The one thing it does delete — a
   cached model, on `D` — states the cost first, takes only a lowercase `y`, and

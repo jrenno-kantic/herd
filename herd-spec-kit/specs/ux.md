@@ -45,8 +45,12 @@ one where letters are shortcuts; every other mode captures text until `Enter` or
 - `ConfirmLaunch` - answering a launch prompt: port in use, too large, or not
   downloaded
 - `ConfirmQuit` - a normal `q` exit while a supervised process is starting,
-  serving, or stopping. It names the manual model or identifies router mode and
-  its configured resident limit; any other work in flight is listed separately
+  serving, or stopping, **or** while anything is in flight that quitting would
+  interrupt: a download, a chat probe, a running command. It names the manual
+  model or identifies router mode and its configured resident limit; the work in
+  flight is listed separately. A live server is asked about but never listed —
+  stopping it on exit is what happens every time, and asking about the normal
+  case would train the user to dismiss the prompt unread
 - `ConfirmDelete` - answering "this removes a cached model". Its own mode
   rather than another launch prompt: every other confirmation asks whether to
   *start* something, and answering the wrong one of those costs a launch. This
@@ -55,12 +59,20 @@ one where letters are shortcuts; every other mode captures text until `Enter` or
 - `Commands` - the `:help` listing of what the command bar accepts
 - `About` - the `:about` dialog: which build this is, machine/config context,
   and the startup result for `llama-server` and `hf`
+- `OpenCode` - the `o` overlay on the Models screen: the `opencode.json`
+  provider block for the highlighted preset. The only overlay with a key of its
+  own — `y` copies the block and closes, any other key just closes
 
 `Help`, `Commands` and `About` are three overlays rather than one because they
 answer three different questions — "what does this key do", "what can I type",
 "what am I running" — and a single list of all three would bury each in the
 others. All three close on any key, and all three are answered locally, before
 the busy gate: they are what a stuck user reaches for.
+
+`OpenCode` is a fourth reference card, and the one exception to "any key
+dismisses": its block is there to be taken away rather than read, so `y` copies
+it — the same key that copies on Models, Router and Hub — and closes, because
+every other action key in the program returns to `Browse`.
 
 ## Keybindings
 
@@ -73,7 +85,7 @@ Global:
 | `Tab` / `Shift-Tab` or `→` / `←` | cycle screens |
 | `:` | command bar — `:help` lists what it accepts |
 | `?` | key reference |
-| `q` | quit; confirm first while a manual model or router process is live |
+| `q` | quit; confirm first while a server is live, or work is in flight |
 | `Q` | quit at once, abandoning it |
 
 Models:
@@ -87,6 +99,7 @@ Models:
 | `d` | download it without launching |
 | `f` | star it, or take the star off |
 | `y` | copy the launch command to the clipboard |
+| `o` | show the OpenCode provider block for this preset |
 | `s` | stop the server, or clear a failed launch |
 | `/` | filter (`Enter` keeps, `Esc` clears) |
 | `t` / `T` | next / previous tier |
@@ -184,14 +197,24 @@ because a section header takes two rows for one item.
   state, since a server started outside herd is a supported thing to probe
 - Config errors render in the Models screen and never abort the UI
 - Startup checks execute both tools' `--version` commands before entering the
-  alternate screen. Missing/broken `llama-server` exits with a normal terminal
-  error; missing/broken `hf` logs that downloads are disabled, and `d` or a
-  confirmed missing-model launch refuses with the same reason
+  alternate screen, concurrently and with a 15-second bound each. Missing/broken
+  `llama-server` exits with a normal terminal error; missing/broken `hf` logs
+  that downloads are disabled, and `d` or a confirmed missing-model launch
+  refuses with the same reason
 - The command bar names what the typed line would run, so a typo reads as
   `unknown` before Enter rather than after it
 - Input is ignored while a command is in flight — except `stop` and `:help`,
   the two things wanted *because* something is stuck
-- Normal quit confirms only while a supervised manual or router process is
-  starting, serving, or stopping. Manual mode names the model and router mode
-  reports its configured maximum rather than inventing an exact resident
-  count. Idle and failed states exit directly; `Q` remains immediate
+- Normal quit confirms while a supervised manual or router process is starting,
+  serving, or stopping, and also while a download, a chat probe or a command is
+  in flight. Manual mode names the model and router mode reports its configured
+  maximum rather than inventing an exact resident count. When a download is what
+  is at stake, the prompt says it resumes from where it stopped — `hf` writes
+  into a `.incomplete` blob — because a prompt implying six gigabytes are about
+  to be thrown away scares the user into the wrong answer. With nothing live and
+  nothing in flight it exits directly; `Q` remains immediate
+- The OpenCode block is built from the launch argv rather than from the ini, so
+  the endpoint, alias and context size are the ones a launch would really use,
+  Settings-screen overrides included. Fields herd cannot support are omitted
+  rather than guessed, and a terminal too short to draw the block says how many
+  rows it would need instead of cutting it — `y` still copies it whole

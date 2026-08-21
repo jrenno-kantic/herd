@@ -1,6 +1,6 @@
 # Roadmap
 
-Status as of 2026-08-18 (herd 0.8.8-rc.4; stable Homebrew formula 0.8.7).
+Status as of 2026-08-21 (herd 0.8.9; stable Homebrew formula 0.8.7).
 
 ## Delivered
 
@@ -27,9 +27,10 @@ Status as of 2026-08-18 (herd 0.8.8-rc.4; stable Homebrew formula 0.8.7).
   than clipping off the right edge
 - The Models `REPO` column consumes every spare cell while fixed columns remain
   visible
-- Graceful exit: `q` confirms while a manual or router process is live, naming
-  its serving state and anything else that would be abandoned; idle exits
-  directly, `Q` forces, and shutdown remains bounded
+- Graceful exit: `q` confirms while a manual or router process is live, **and**
+  while a download, probe or command is in flight, naming its serving state and
+  the work that would be interrupted; with neither it exits directly, `Q`
+  forces, and shutdown remains bounded
 - Sidebar machine telemetry: architecture, GPU, installed RAM and available
   memory, refreshed around llama lifecycle changes
 - Build stamping (`herd --version`, commit + date) and `make release`
@@ -59,7 +60,9 @@ Status as of 2026-08-18 (herd 0.8.8-rc.4; stable Homebrew formula 0.8.7).
 - `:about` — the build stamp, machine facts and probed external-tool versions
   (config, tier, memory, cache, llama-server, hf) in one place
 - Startup preflight: `llama-server` is required before the TUI opens; a missing
-  `hf` leaves local launching available while downloads are disabled explicitly
+  `hf` leaves local launching available while downloads are disabled explicitly.
+  Both probes run concurrently under a fifteen-second bound, which only ever
+  waits on a binary that is present and slow
 - Public Homebrew distribution through `jrenno-kantic/tap/herd-llm`, with
   `llama.cpp` and `hf` declared as runtime dependencies and tap-native CI
 - dist 0.32.0 release automation, validated by the `v0.8.8-rc.2` three-platform
@@ -74,6 +77,17 @@ Status as of 2026-08-18 (herd 0.8.8-rc.4; stable Homebrew formula 0.8.7).
 - The Settings list scrolls with a bar of its own, counted in rows so that
   two-row section headers do not put the thumb out, and its rows are clipped
   with a mark rather than cut by the terminal
+- **Pointing OpenCode at a preset**: `o` on the Models screen shows the
+  `opencode.json` provider block for the highlighted preset and `y` copies it.
+  Built from the launch argv, so the endpoint, alias and context size are the
+  ones a launch would really use; fields herd cannot support are omitted rather
+  than guessed; and the file itself is never written, like `models.ini`
+- **Fixed:** `q` quit outright while a download was running. The prompt asked
+  about the server alone, while `in_flight` already knew what was at stake. It
+  now asks for either, and says that an interrupted download resumes
+- The startup preflight bound is fifteen seconds, not three. Three was enough on
+  a warm machine and not on a cold one, and a false timeout either aborts before
+  the TUI opens or disables downloads for the session
 
 ## Next
 
@@ -87,7 +101,7 @@ CI validate the generated prebuilt `herd-llm` formula before retiring the
 working source formula as the active path. The rollback and acceptance checks
 remain in `distribution.md`.
 
-`TODO.md` currently has no other outstanding tasks. Longer-term candidates
+`TODO.md` currently has no outstanding tasks. Longer-term candidates
 remain in `doc/PROMPT_NEXT_STEPS.md` (French): auto-restart on
 crash, a full end-to-end test against a real `llama-server` (spawn, model load,
 kill), flagging presets duplicated across tiers, reading vision support from the

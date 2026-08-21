@@ -2,7 +2,7 @@
 
 ## Llama Service (`services/llama/`)
 
-The product. Nine modules:
+The product. Ten modules:
 
 - `ini.rs` - parses `models.ini`, builds llama-server argv as a `Vec<String>`
   (never a shell string, so no quoting bugs), resolves which config file to use,
@@ -61,6 +61,17 @@ The product. Nine modules:
   the preset's own keys. Nothing is inferred from vendor knowledge that would
   rot, and `no-mmproj` is deliberately *not* read as evidence of a projector:
   it is set defensively across the shipped tiers, including on text-only models
+- `opencode.rs` - the `opencode.json` provider block for a preset, so an editor
+  can be pointed at a running preset without transcribing a port and an alias
+  by hand. Built from the **launch argv**, where every precedence layer has
+  already been resolved, so a Settings-screen override reaches the block as it
+  reaches the process. The model id is the `--alias`, since that is what
+  llama-server answers to at `/v1/models`. Fields herd cannot support are
+  omitted rather than guessed — `tool_call` only with `--jinja`, `attachment`
+  only with vision switched on, `limit` only with a context size — and the JSON
+  is emitted by hand so its key order matches OpenCode's own documentation and
+  the block stays short enough to draw in a terminal box; a test parses it back
+  rather than taking validity on trust
 
 Fixtures for this service live in `data/` (a snapshot of `~/models/`); they are
 parsed by the tests but never used to resolve config at runtime.
@@ -81,8 +92,17 @@ account for both.
 `services/preflight.rs` executes `llama-server --version` and `hf --version`
 concurrently before the TUI starts. A successful probe retains the first
 non-empty output line; failure distinguishes not-found, execution failure,
-non-zero exit and a three-second timeout. This checks that a tool can actually
-run, not merely that a path with its name exists.
+non-zero exit and a **fifteen-second** timeout. This checks that a tool can
+actually run, not merely that a path with its name exists.
+
+The bound is deliberately generous. A tool that is absent fails on `spawn` and
+never reaches it, so the only thing waited on is a binary that is there and
+slow — which both of these are on a cold machine, `llama-server` initialising
+its backends and `hf` starting a Python interpreter. Three seconds was enough
+on a warm machine and not on a cold one, and both false timeouts are expensive:
+`llama-server` is required, so one aborts before the TUI opens, and one on `hf`
+disables downloads for the whole session. The message names the constant rather
+than a literal, since the two had already drifted once.
 
 The result is `Tools { llama_server: Tool, hf: Tool }`. `llama-server` is the
 only required tool and prevents startup when unavailable. `hf` is optional:

@@ -73,7 +73,12 @@ pub const GLOBAL: &[Binding] = &[
     brief(&["c"], "c", "config", "choose which models.ini to use"),
     brief(&[":"], ":", "command", "command bar"),
     brief(&["?"], "?", "help", "this help"),
-    brief(&["q"], "q", "quit", "quit — asks if a server is active"),
+    brief(
+        &["q"],
+        "q",
+        "quit",
+        "quit — asks if a server is up or work is in flight",
+    ),
     full(&["Q"], "Q", "quit at once, abandoning anything in flight"),
 ];
 
@@ -143,6 +148,14 @@ const MODELS: &[Binding] = &[
         short: "copy",
         brief: false,
     },
+    // Also out of the footer, for the same reason, and it is the one key
+    // here whose answer is a whole overlay rather than a line — so `?`
+    // and the description row are where it is found.
+    full(
+        &["o"],
+        "o",
+        "show the OpenCode provider config for this preset",
+    ),
     // Not in the footer: the preview's own border carries it, and only
     // when there is something below the fold — a key advertised where it
     // would do nothing is worse than one nobody mentioned.

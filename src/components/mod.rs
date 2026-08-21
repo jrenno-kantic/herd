@@ -6,6 +6,7 @@ pub mod help;
 pub mod hub;
 pub mod logs;
 pub mod models;
+pub mod opencode;
 pub mod picker;
 pub mod router;
 pub mod server;

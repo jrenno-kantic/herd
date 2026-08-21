@@ -168,8 +168,8 @@ Le dépôt embarque désormais un instantané des paliers de presets :
 
 ```
 data/
-├── 16gb/models.ini      13 presets (4B à 27B)
-├── 32gb/models.ini       9 presets (12B à 35B)
+├── 16gb/models.ini      14 presets (4B à 27B)
+├── 32gb/models.ini      10 presets (12B à 35B)
 ├── scripts/llama-launch.js
 ├── scripts/test_call.sh
 └── start-router.sh
@@ -305,22 +305,106 @@ de savoir ce que c'est. Quand le port est tenu par son propre enfant supervisé,
 
 ## État de validation
 
-Validation automatisée sur macOS / Apple Silicon le 2026-08-18 :
+Validation automatisée sur macOS / Apple Silicon le 2026-08-21 :
 
 ```
 make verify                  # check, clippy, format, tests, build release
-cargo test                   # 460 tests OK (+14 tests `live`/système ignorés)
+cargo test                   # 483 tests OK (+14 tests `live`/système ignorés)
 ```
 
-Rendu vérifié contre le vrai `~/models/32gb/models.ini` : les 9 presets
+Rendu vérifié contre le vrai `~/models/32gb/models.ini` : les 10 presets
 s'affichent avec repo, ctx et mode spéculatif, et l'aperçu argv est correct.
 Endpoints vérifiés contre un vrai llama-server (build 10330) : `/health`
 renvoie bien `200 {"status":"ok"}` et `/v1/models` la forme « models ».
 
+## Interface 0.8.9 (2026-08-21)
+
+### `o` : la config OpenCode d'un preset
+
+`o` sur l'écran Models ouvre une surimpression en lecture seule contenant le
+bloc `provider` d'`opencode.json` pour le preset sélectionné. `y` le copie et
+ferme ; toute autre touche ferme sans copier. C'est la quatrième fiche de
+référence, après `?`, `:help` et `:about`, et la seule qui ait une touche à
+elle.
+
+L'écran Models répond déjà à « qu'est-ce que ça lancerait ? » avec l'aperçu
+argv ; ceci répond à la question suivante d'une session de code — « et comment
+j'y branche mon éditeur ? » — à partir des mêmes faits. Recopier un port dans un
+panneau et un alias dans un autre est exactement d'où vient la faute de frappe
+qui fait parler OpenCode dans le vide.
+
+Points de conception, tous vérifiés par des tests :
+
+- **Construit depuis `LaunchSettings::argv`**, jamais depuis l'ini directement,
+  pour la même raison que `shell_command` : l'argv est l'endroit où
+  `[server] → [*] → [model] → mono-focus → overrides → CLI` est déjà résolu, donc
+  un `--ctx-size` modifié dans Settings arrive dans ce bloc comme il arrive au
+  processus.
+- **L'identifiant du modèle est l'`--alias`**, pas le nom de section : c'est ce
+  à quoi llama-server répond sur `/v1/models`. Les deux paliers livrés mettent
+  la même chaîne des deux côtés, donc un ini qui ne le ferait pas aurait cassé
+  en silence.
+- **Ce que herd ne peut pas justifier est omis, jamais deviné** — même retenue
+  que `Fit::Unknown`, et elle compte davantage ici puisque OpenCode agit dessus :
+  `tool_call` seulement avec `--jinja` (c'est le templating jinja qui fait
+  traduire par llama-server la syntaxe d'appel d'outil du modèle en appels
+  OpenAI, et un agent de code sans cela n'utilise pas un seul outil),
+  `attachment` seulement quand la vision est *activée* selon `caps.rs`,
+  `reasoning` depuis `--reasoning`/`--reasoning-format` (`off` et `none` valent
+  faux), et `limit` seulement avec une taille de contexte. `limit` exige ses deux
+  moitiés ou aucune, le schéma d'OpenCode les rendant obligatoires ensemble :
+  `output` vaut `--n-predict` quand le preset le plafonne, et la taille de
+  contexte sinon — llama-server génère par défaut jusqu'à saturation du
+  contexte, donc c'est le plafond qu'il appliquera vraiment, pas un chiffre
+  inventé.
+- **Le JSON est écrit à la main**, pas via `serde_json::to_string_pretty` : une
+  `serde_json::Map` est une `BTreeMap` et trierait `$schema` après `provider`, et
+  `options` tient sur une ligne pour que le bloc entre dans une boîte de
+  terminal. La validité n'est pas prise sur parole — un test le reparse — et
+  chaque chaîne passe par `serde_json::to_string`, donc une apostrophe dans un
+  alias édité à la main s'échappe au lieu de produire un bloc illisible.
+- **La hauteur est la seule dimension que l'élision ne sauve pas** : un JSON
+  amputé du milieu n'est pas un JSON. Un terminal trop court affiche une boîte
+  courte indiquant le nombre de lignes nécessaires, plutôt qu'une accolade
+  ouvrante qui s'arrête ; `y` copie le bloc entier de toute façon.
+- **herd n'écrit pas `~/.config/opencode/opencode.json`.** Même règle que
+  `overrides.rs` et `models.ini` : le fichier est maintenu à la main, il
+  appartient à un autre programme, et aucun aller-retour ne préserve ses
+  commentaires ni l'ordre de ses clés.
+
+### Quitter pendant un téléchargement
+
+`quit()` teste désormais `is_live() || !in_flight().is_empty()`. Il ne testait
+que le serveur, donc un téléchargement sans rien qui serve quittait sans poser
+de question — `in_flight` connaissait déjà l'enjeu et personne ne le consultait.
+
+Les deux conditions restent distinctes : un serveur vivant est *demandé* mais
+jamais *listé*, parce que l'arrêter à la sortie est le comportement documenté à
+chaque fois, et le mettre sur une liste de travaux perdus apprendrait à
+l'utilisateur à fermer la modale sans la lire.
+
+La modale ajoute une ligne quand c'est un téléchargement qui est en jeu : **il
+reprend là où il s'est arrêté**. C'est vrai (`hf` écrit dans un blob
+`.incomplete` et repart de là) et c'est la différence entre une décision et une
+frayeur — laisser croire que six gigaoctets vont être jetés pousse vers la
+mauvaise réponse.
+
+### Le contrôle de démarrage attend quinze secondes
+
+`PROBE_TIMEOUT` passe de trois à quinze secondes. Trois suffisaient sur une
+machine chaude et pas sur une machine froide, et les deux faux dépassements
+coûtent cher : `llama-server` est requis, donc l'un interrompt le démarrage
+avant l'écran alternatif, et l'autre désactive les téléchargements pour toute la
+session. Un outil simplement absent échoue toujours immédiatement — il échoue au
+`spawn`, pas au délai — et les deux sondes tournent en parallèle, donc c'est le
+pire cas du démarrage entier et non par outil. Le message est écrit depuis la
+constante, les deux ayant déjà divergé une fois.
+
 ## Interface 0.8.3 (2026-08-18)
 
 - Avant d'entrer dans l'écran alternatif, herd exécute en parallèle
-  `llama-server --version` et `hf --version`, chacun borné à trois secondes.
+  `llama-server --version` et `hf --version`, chacun borné à quinze secondes
+  (trois au départ, voir la section 0.8.9 ci-dessus).
 - `llama-server` est requis : absent, non exécutable, en échec ou bloqué, il
   arrête le démarrage avec une erreur dans le terminal normal.
 - `hf` est une capacité optionnelle : son absence laisse la consultation et le
@@ -331,17 +415,18 @@ renvoie bien `200 {"status":"ok"}` et `/v1/models` la forme « models ».
 
 ## Interface 0.8.2 (2026-08-17)
 
-- `q` ouvre une confirmation seulement pendant qu'un processus manuel ou
-  routeur est en démarrage, en service ou en arrêt. La modale nomme le preset
-  manuel ou le mode routeur avec sa limite `models-max`, puis liste les autres
-  travaux abandonnés. Sans serveur supervisé actif, `q` quitte directement ;
-  `Q` reste la sortie immédiate.
+- `q` ouvre une confirmation pendant qu'un processus manuel ou routeur est en
+  démarrage, en service ou en arrêt. La modale nomme le preset manuel ou le mode
+  routeur avec sa limite `models-max`, puis liste les autres travaux abandonnés.
+  `Q` reste la sortie immédiate. *(Complété en 0.8.9 : un téléchargement, une
+  sonde ou une commande en cours déclenchent la même confirmation.)*
 - La colonne `REPO` de Models prend toute la largeur restante, sans plafond
   arbitraire, après conservation ou retrait ordonné des colonnes fixes.
 - La barre latérale affiche architecture, GPU, RAM installée et mémoire
   disponible. La détection GPU est asynchrone et la mémoire est rééchantillonnée
   aux transitions de cycle de vie de llama-server.
-- Le palier `32gb` contient 9 presets, avec `qwen38-27b`.
+- Le palier `32gb` contient 9 presets, avec `qwen38-27b`. *(Il en compte 10
+  depuis l'ajout de `huihui-qwen3-6-35b-a3b-abliterated-mtp`.)*
 
 ## Fiabilité du process llama-server (2026-08-11)
 

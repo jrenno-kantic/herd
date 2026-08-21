@@ -35,3 +35,5 @@ PRs should explain the user-visible change, link relevant issues or spec notes, 
 ## Configuration & Safety
 
 Do not commit machine-local `~/.herd_config`, model weights, cache contents, or secrets. Treat cache deletion and spawned shell/process changes as destructive paths: retain explicit confirmation and add regression tests.
+
+Files that belong to someone else are never written: `models.ini` is hand-maintained and commented, and so is `~/.config/opencode/opencode.json`. What HERD has to offer for either goes to the clipboard. Anything HERD does own — `~/.herd_config`, `~/.config/herd/session.json` — is written through a temporary file and renamed into place.

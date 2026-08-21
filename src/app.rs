@@ -124,6 +124,16 @@ pub enum Mode {
     /// something, and answering `y` to the wrong one of those costs a
     /// launch. This one costs the download.
     ConfirmDelete,
+    /// The `o` overlay on the Models screen: the `opencode.json` provider
+    /// block for the highlighted preset.
+    ///
+    /// A fourth reference card, and the only one with a key of its own —
+    /// `y` copies, like everywhere else in the program, and any other key
+    /// closes it. It is not a screen because it answers a question about
+    /// the row the cursor is on, and it is not a log line because a
+    /// twenty-line JSON block written into a pane the server also writes
+    /// to would be gone by the time it was read.
+    OpenCode,
 }
 
 #[derive(Debug, Clone)]
@@ -787,6 +797,31 @@ impl LauncherState {
     pub fn shell_command(&self) -> Result<String, String> {
         self.argv_preview()
             .map(|argv| clipboard::shell_command(llama::process::BINARY, &argv))
+    }
+
+    /// The `opencode.json` provider block for the highlighted preset.
+    ///
+    /// Built from `argv_preview` for the same reason `shell_command` is:
+    /// the argv is where every precedence layer has already been
+    /// resolved, so a context size changed on the Settings screen reaches
+    /// this block exactly as it reaches the process. Reading the ini again
+    /// here would be a second answer to a question that already has one.
+    pub fn opencode_provider(&self) -> Result<llama::opencode::Provider, String> {
+        let config = self
+            .config
+            .as_ref()
+            .ok_or_else(|| "no config loaded".to_string())?;
+        let model = self
+            .selected_model()
+            .ok_or_else(|| "no model selected".to_string())?;
+        let argv = self.argv_preview()?;
+
+        Ok(llama::opencode::Provider::from_launch(
+            &llama::api::base_url(&config.client_host(), config.port()),
+            &model,
+            &argv,
+            &self.capabilities(&model),
+        ))
     }
 
     pub fn tier_name(&self) -> Option<&str> {
@@ -1601,6 +1636,7 @@ impl App {
             // its own small joke.
             Mode::Help | Mode::Commands | Mode::About => self.handle_help_key(key),
             Mode::ConfirmDelete => self.handle_delete_key(key),
+            Mode::OpenCode => self.handle_opencode_key(key),
             Mode::Command => self.handle_command_key(key),
             Mode::Filter => self.handle_filter_key(key),
             Mode::EditSetting => self.handle_edit_key(key),
@@ -1664,6 +1700,59 @@ impl App {
         Action::None
     }
 
+    /// The OpenCode overlay: `y` copies the block, anything else just
+    /// closes. Either way the box goes.
+    ///
+    /// `y` is the same key that copies on the Models, Router and Hub
+    /// screens — the block is there to be taken away rather than read.
+    /// It closes afterwards because every other action key in the program
+    /// returns to Browse, and a box left standing over a copy that has
+    /// already happened is one more keystroke for nothing.
+    fn handle_opencode_key(&mut self, key: KeyEvent) -> Action {
+        let copy = matches!(key.code, KeyCode::Char('y'));
+        self.mode = Mode::Browse;
+
+        if copy {
+            self.copy_opencode()
+        } else {
+            Action::None
+        }
+    }
+
+    /// Opens the overlay, or says why there is nothing to show.
+    ///
+    /// A preset that cannot build an argv cannot produce a provider block
+    /// either, and an empty box with a title is a worse answer than a
+    /// line naming the reason.
+    fn show_opencode(&mut self) -> Action {
+        match self.llama.opencode_provider() {
+            Ok(_) => {
+                self.mode = Mode::OpenCode;
+                Action::None
+            }
+            Err(error) => {
+                self.push_log(format!("no OpenCode config: {error}"));
+                Action::None
+            }
+        }
+    }
+
+    /// Copies the provider block. Outside the `running` flag, like every
+    /// other copy: putting text on the clipboard is not work the UI waits
+    /// for.
+    fn copy_opencode(&mut self) -> Action {
+        match self.llama.opencode_provider() {
+            Ok(provider) => Action::CopyToClipboard {
+                label: format!("{} opencode provider", provider.model_id),
+                text: provider.json(),
+            },
+            Err(error) => {
+                self.push_log(format!("nothing to copy: {error}"));
+                Action::None
+            }
+        }
+    }
+
     fn handle_models_key(&mut self, key: KeyEvent) -> Action {
         if let Some(cursor) = screen_input::moved(
             self.llama.cursor,
@@ -1698,6 +1787,7 @@ impl App {
             KeyCode::Enter => self.launch_selected(),
             KeyCode::Char('d') => self.download_selected(),
             KeyCode::Char('y') => self.copy_selected(),
+            KeyCode::Char('o') => self.show_opencode(),
             KeyCode::Char('f') => self.star_selected(),
             KeyCode::Char('s') => self.stop_server(),
             _ => Action::None,
@@ -2384,9 +2474,19 @@ impl App {
         work
     }
 
-    /// `q`: asks only while a supervised server is live. `Q` is immediate.
+    /// `q`: asks while a supervised server is live, **or** while anything
+    /// in flight would be abandoned. `Q` is immediate.
+    ///
+    /// The two conditions are separate on purpose. A live server is not
+    /// work that would be *lost* — stopping it on exit is the documented
+    /// behaviour every time — so it is asked about but never listed by
+    /// [`Self::in_flight`]. A download is the opposite: nothing on screen
+    /// says a `q` is about to abandon it, and a 16 GiB fetch interrupted
+    /// two minutes from the end is the most expensive keystroke in the
+    /// program. It used to quit outright, because this checked the server
+    /// alone while `in_flight` already had the answer.
     fn quit(&mut self) -> Action {
-        if self.llama.server.state.is_live() {
+        if self.llama.server.state.is_live() || !self.in_flight().is_empty() {
             self.mode = Mode::ConfirmQuit;
             Action::None
         } else {
@@ -3926,8 +4026,8 @@ hf-repo = unsloth/gemma-4-12B-it-qat-GGUF:UD-Q4_K_XL
             .collect();
 
         assert_eq!(tiers.len(), 2);
-        assert_eq!(tiers[0].presets, 13, "16gb preset count");
-        assert_eq!(tiers[1].presets, 9, "32gb preset count");
+        assert_eq!(tiers[0].presets, 14, "16gb preset count");
+        assert_eq!(tiers[1].presets, 10, "32gb preset count");
     }
 
     /// The warning the picker exists for: on a small machine most of the
@@ -3997,7 +4097,7 @@ hf-repo = unsloth/gemma-4-12B-it-qat-GGUF:UD-Q4_K_XL
             Action::ConfigPathChanged(path) => {
                 assert_eq!(path, shipped("32gb"));
                 assert_eq!(app.llama.config_path, shipped("32gb"));
-                assert_eq!(app.llama.model_names().len(), 9);
+                assert_eq!(app.llama.model_names().len(), 10);
             }
             other => panic!("expected ConfigPathChanged, got {other:?}"),
         }
@@ -4574,6 +4674,75 @@ hf-repo = unsloth/gemma-4-12B-it-qat-GGUF:UD-Q4_K_XL
         assert_eq!(app.mode, Mode::Browse);
     }
 
+    /// `o` on the Models screen answers the other half of the argv
+    /// preview's question: the preview says what would run, this says how
+    /// to talk to it once it is running.
+    #[test]
+    fn o_opens_the_opencode_overlay_for_the_selected_preset() {
+        let mut app = App::with_config_path(shipped("32gb"));
+
+        assert!(matches!(app.update(ch('o')), Action::None));
+        assert_eq!(app.mode, Mode::OpenCode);
+
+        let provider = app.llama.opencode_provider().expect("a provider");
+        assert_eq!(provider.model_id, "gemma4-12b");
+        assert_eq!(
+            provider.base_url, "http://127.0.0.1:1234",
+            "the endpoint comes from [server], where host is 0.0.0.0"
+        );
+        // `reasoning = off` is on every preset in both shipped tiers, and
+        // `jinja = true` is in both `[server]` blocks.
+        assert_eq!(provider.reasoning, Some(false));
+        assert_eq!(provider.tool_call, Some(true));
+    }
+
+    /// The copy comes from the same place the block on screen does, so
+    /// what lands on the clipboard cannot be a re-parse of a rendering —
+    /// the same rule as the argv `y`.
+    #[test]
+    fn y_in_the_overlay_copies_the_block_and_closes_it() {
+        let mut app = App::with_config_path(shipped("32gb"));
+        app.update(ch('o'));
+
+        let Action::CopyToClipboard { label, text } = app.update(ch('y')) else {
+            panic!("y should copy the provider block");
+        };
+        assert!(label.contains("gemma4-12b"), "{label}");
+        assert_eq!(text, app.llama.opencode_provider().unwrap().json());
+        assert_eq!(app.mode, Mode::Browse, "the overlay should have closed");
+
+        // And it is outside the busy gate, like every other copy: a
+        // launch in flight is no reason not to be able to take the text.
+        assert!(!app.running);
+    }
+
+    /// Any other key just dismisses it — it is a reference card first.
+    #[test]
+    fn any_other_key_closes_the_opencode_overlay_without_copying() {
+        let mut app = App::with_config_path(shipped("32gb"));
+        app.update(ch('o'));
+
+        assert!(matches!(app.update(ch('n')), Action::None));
+        assert_eq!(app.mode, Mode::Browse);
+    }
+
+    /// A tier that could not be read has no argv and so no provider
+    /// block. It says so rather than opening an empty box.
+    #[test]
+    fn o_with_no_config_says_so_instead_of_opening_an_empty_box() {
+        let mut app = App::with_config_path(PathBuf::from("/nonexistent/models.ini"));
+
+        assert!(matches!(app.update(ch('o')), Action::None));
+        assert_eq!(app.mode, Mode::Browse);
+        assert!(
+            app.logs
+                .iter()
+                .any(|line| line.contains("no OpenCode config")),
+            "no reason logged: {:?}",
+            app.logs
+        );
+    }
+
     /// A supervised server is deliberately *not* work in flight: stopping
     /// it on exit is the documented behaviour, every time.
     #[test]
@@ -4607,18 +4776,45 @@ hf-repo = unsloth/gemma-4-12B-it-qat-GGUF:UD-Q4_K_XL
         assert_eq!(app.mode, Mode::Browse);
     }
 
+    /// A download with no server running used to quit outright: the
+    /// prompt asked about the server alone, while `in_flight` already
+    /// knew what was at stake. Interrupting a fetch is recoverable — `hf`
+    /// resumes from its partial blob — but it is not free, and nothing on
+    /// screen warned that `q` was about to do it.
     #[test]
-    fn a_download_without_a_live_server_does_not_trigger_the_server_prompt() {
+    fn a_download_alone_is_enough_to_ask_before_quitting() {
         let mut app = app_with_sample();
         app.update(UiEvent::DownloadProgress {
             model: "gemma4-12b".into(),
             done: 1_000,
             total: 4_000,
         });
+        assert!(!app.llama.server.state.is_live(), "no server should be up");
 
-        assert!(matches!(app.update(ch('q')), Action::Quit));
-        assert_eq!(app.mode, Mode::Browse);
+        assert!(matches!(app.update(ch('q')), Action::None));
+        assert_eq!(app.mode, Mode::ConfirmQuit);
         assert!(app.in_flight()[0].contains("gemma4-12b"));
+
+        // And the prompt is still refusable, like every other one.
+        assert!(matches!(app.update(ch('n')), Action::None));
+        assert_eq!(app.mode, Mode::Browse);
+    }
+
+    /// The other two kinds of work in flight get the same protection —
+    /// the prompt is driven by `in_flight`, not by a list of special
+    /// cases that a new kind of work would have to be added to.
+    #[test]
+    fn a_chat_probe_or_a_running_command_also_asks() {
+        for arm in ["chat", "command"] {
+            let mut app = app_with_sample();
+            match arm {
+                "chat" => app.llama.chat_pending = true,
+                _ => app.running = true,
+            }
+
+            assert!(matches!(app.update(ch('q')), Action::None), "{arm}");
+            assert_eq!(app.mode, Mode::ConfirmQuit, "{arm}");
+        }
     }
 
     #[test]

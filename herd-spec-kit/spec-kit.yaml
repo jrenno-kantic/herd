@@ -1,15 +1,16 @@
 id: herd
 name: HERD
-version: 3.1.0
-date: 2026-08-18
-tracks: herd 0.8.8-rc.4
+version: 3.2.0
+date: 2026-08-21
+tracks: herd 0.8.9
 
 description: >
   Terminal launcher for local LLMs. Browse the model presets in a
   llama-server models.ini, see which are actually on the machine and what
   the machine holds that no preset names, fetch what is missing, launch
-  one, monitor its lifecycle, and override server and model options —
-  kept in ~/.herd_config.
+  one, monitor its lifecycle, override server and model options — kept in
+  ~/.herd_config — and hand an editor the OpenCode provider config that
+  points at it.
 
 tech:
   language: Rust
@@ -20,7 +21,9 @@ goals:
   - user-friendly: browse and launch, no command line required
   - keyboard-first UX
   - trustworthy state: the displayed lifecycle reflects the real process
-  - never mutate the user's hand-maintained models.ini
+  - never mutate a hand-maintained file that belongs to someone else: not
+    models.ini, not the user's opencode.json — what herd has to offer goes to
+    the clipboard instead
   - non-blocking UI: no I/O on the render path
   - never claim what cannot be measured: unknown is a valid answer
   - measure rather than estimate wherever the file is already on disk

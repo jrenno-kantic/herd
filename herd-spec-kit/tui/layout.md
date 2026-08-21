@@ -62,11 +62,18 @@ Terminal geometry, built in `layout.rs`.
   choose, so the thumb cannot disagree with the rows beside it
 - Modals are centred over the whole frame, each clamped so it still fits in a
   terminal smaller than the modal itself: the launch confirmation (port in use /
-  too large / not downloaded), the quit confirmation, the `models.ini` picker,
-  the `?` key reference, the `:help` command listing and the `:about` dialog.
-  The listing sizes itself from its content and elides visibly when the
-  terminal is narrower; the About dialog elides long paths and tool-version
-  results from the *left*, since their identifying detail is at the end
+  too large / not downloaded), the quit confirmation, the delete confirmation,
+  the `models.ini` picker, the `?` key reference, the `:help` command listing,
+  the `:about` dialog and the `o` OpenCode provider block. The listing sizes
+  itself from its content and elides visibly when the terminal is narrower; the
+  About dialog elides long paths and tool-version results from the *left*, since
+  their identifying detail is at the end
+- The OpenCode overlay sizes itself from the block the same way, but **height is
+  the one dimension eliding cannot save**: JSON with a middle missing is not
+  JSON. A terminal too short for the block draws a short box naming how many
+  rows it would need, rather than an opening brace that runs out. `y` copies the
+  block whole either way, since the key belongs to the mode and not to what is
+  drawn
 - The status bar leads with the lifecycle tag, coloured by state, then the model,
   the phase within that state, the elapsed time, endpoint and a hint for the
   current mode
