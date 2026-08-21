@@ -59,9 +59,32 @@ current formula.
   version-match rule in the user-facing contract doing its job, and it is worth
   keeping in mind: the guard is dist's, not the tag's, and it only fires after
   the tag is public. Delete and recreate rather than force-moving a bad tag.
-- The next stable tag performs the first automated tap update and tap-native
-  Homebrew validation. The source formula remains the rollback path until that
-  publication has been validated by the tap's own workflow.
+- `v0.8.9` performed the first automated tap update, on 2026-08-21. The tap now
+  serves the generated prebuilt formula: three platforms with checksums, MIT
+  licence, `hf` and `llama.cpp` as runtime dependencies. `brew upgrade` from
+  the 0.8.7 source formula took 0 seconds — prebuilt rather than compiled,
+  which is the point of the migration — and the installed binary reports
+  `herd 0.8.9 (e7715e8 2026-08-21)`. The v0.8.7 source formula remains in tap
+  history as the rollback path.
+- **Open: the tap's `brew test-bot` is red on the generated formula**, for two
+  reasons, neither of which stops an install. Filed upstream as
+  [cargo-dist#2489](https://github.com/axodotdev/cargo-dist/issues/2489):
+  - `brew audit` rejects `version "0.8.9"` as redundant with the version it
+    scans out of the URL. The line is not simply removable: the URLs sit inside
+    `on_macos`/`on_linux` blocks, so dropping it makes every platform depend on
+    Homebrew's URL scanning.
+  - `brew test` reports "defines no test" — the generated formula has no
+    `test do` block, where the hand-written source formula asserted
+    `herd --version` matched the formula's version. That assertion is what
+    proved the installed binary was the version claimed, and the migration
+    lost it.
+- **Do not hand-patch the tap to clear either.** `dist` regenerates the formula
+  on every release, so a hand-edit is silently reverted at the next tag while
+  reading like a fix — and it contradicts the rule below that `dist init` owns
+  the generated files. The fix belongs upstream or in a dist config knob.
+- What *did* pass on 0.8.9, against the real tap: `dist plan`, `brew style`,
+  `brew readall`, `brew fetch`, `brew install`, `brew linkage --test`, and the
+  checksum plus `--version` of the downloaded Apple Silicon archive.
 
 The intended generated configuration is equivalent to:
 

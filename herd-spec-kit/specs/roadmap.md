@@ -96,10 +96,18 @@ process-supervision tests were a test backstop rather than a product fault —
 see `distribution.md`. Verify is green on Ubuntu and macOS, which clears the
 gate a stable tag was waiting on.
 
-Publish the first stable dist-managed release and let the tap's Homebrew
-CI validate the generated prebuilt `herd-llm` formula before retiring the
-working source formula as the active path. The rollback and acceptance checks
-remain in `distribution.md`.
+**Done (2026-08-21):** `v0.8.9` is the first stable dist-managed release. The
+tap serves the generated prebuilt `herd-llm` formula and installs in 0 seconds
+instead of compiling.
+
+What is left is the tap's own Homebrew CI, which is red on two properties of
+the *generated* formula rather than on this release: `brew audit` calls the
+`version` line redundant with the URL, and `brew test` finds no `test do` block
+where the source formula asserted `herd --version`. Both are filed upstream as
+[cargo-dist#2489](https://github.com/axodotdev/cargo-dist/issues/2489) and must
+not be hand-patched in the tap — dist regenerates the formula every release.
+Install, linkage, style, readall and fetch all pass; the source formula stays
+in tap history as the rollback path. See `distribution.md`.
 
 `TODO.md` currently has no outstanding tasks. Longer-term candidates
 remain in `doc/PROMPT_NEXT_STEPS.md` (French): auto-restart on
