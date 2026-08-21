@@ -91,12 +91,12 @@ Status as of 2026-08-21 (herd 0.8.9; stable Homebrew formula 0.8.7).
 
 ## Next
 
-Resolve the two macOS-only GitHub Verify timeouts in the process-supervision
-tests. Local verification and Ubuntu CI pass, but a stable tag must wait for
-both CI platforms because the dist Release workflow does not depend on the
-separate Verify workflow.
+**Done (2026-08-21):** the two macOS-only Verify timeouts in the
+process-supervision tests were a test backstop rather than a product fault —
+see `distribution.md`. Verify is green on Ubuntu and macOS, which clears the
+gate a stable tag was waiting on.
 
-Then publish the first stable dist-managed release and let the tap's Homebrew
+Publish the first stable dist-managed release and let the tap's Homebrew
 CI validate the generated prebuilt `herd-llm` formula before retiring the
 working source formula as the active path. The rollback and acceptance checks
 remain in `distribution.md`.

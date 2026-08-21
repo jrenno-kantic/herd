@@ -43,14 +43,25 @@ current formula.
 - The generated formula is named `herd-llm` and declares `hf` and `llama.cpp`.
 - Prerelease Homebrew publication was skipped, proving that the stable `0.8.7`
   source formula remains unchanged.
-- Local `make verify` and Ubuntu Verify pass. GitHub's macOS Verify currently
-  times out in `a_healthy_process_transitions_to_serving` and
-  `stopping_then_launching_another_model_switches_cleanly`; this is an open
-  release-readiness issue, not a cargo-dist build failure.
+- Local `make verify`, Ubuntu Verify and macOS Verify all pass as of
+  2026-08-21. The two macOS timeouts in `a_healthy_process_transitions_to_serving`
+  and `stopping_then_launching_another_model_switches_cleanly` were a test
+  backstop, not a product fault: both spawn a real `python3` HTTP server, and
+  15s was comfortable on a developer machine but not on a contended hosted
+  runner. The backstop is now `READY_BACKSTOP` (60s), which costs a healthy run
+  nothing — the same macOS job that failed in 1m55s passes in 3m28s. Both tests
+  also report the state and phase they stalled in, so a future failure says
+  whether the server never bound or simply needed longer.
+- A stray lightweight `v0.8.9` tag was pushed at a commit whose `Cargo.toml`
+  still read `0.8.8-rc.4`. dist refused it at the `plan` step
+  (`--tag=v0.8.8-rc.4 will Announce: herd`) and stopped before building, so
+  `publish-homebrew-formula` never ran and the tap was untouched. That is the
+  version-match rule in the user-facing contract doing its job, and it is worth
+  keeping in mind: the guard is dist's, not the tag's, and it only fires after
+  the tag is public. Delete and recreate rather than force-moving a bad tag.
 - The next stable tag performs the first automated tap update and tap-native
-  Homebrew validation, but it must not be pushed until the independent Verify
-  workflow is green on both platforms. Until that succeeds, the source formula
-  is the rollback path.
+  Homebrew validation. The source formula remains the rollback path until that
+  publication has been validated by the tap's own workflow.
 
 The intended generated configuration is equivalent to:
 
