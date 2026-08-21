@@ -713,6 +713,26 @@ fn spawn_line_forwarder<R>(
 mod tests {
     use super::*;
 
+    /// How long a test waits for a spawned server to be reported ready
+    /// before calling the run broken.
+    ///
+    /// A **backstop, not an assertion about speed**: every wait below
+    /// returns the instant it sees the state it wants, so on a healthy run
+    /// this constant costs nothing at all. It only decides how long a
+    /// *broken* run takes to fail.
+    ///
+    /// It was 15s, which is comfortable on a developer machine and not on
+    /// a hosted macOS runner — those are contended, several times slower,
+    /// and have to cold-start a real `python3` interpreter and bind a
+    /// socket before the poller can see anything. That is why
+    /// `a_healthy_process_transitions_to_serving` and
+    /// `stopping_then_launching_another_model_switches_cleanly` failed on
+    /// GitHub's macOS runner while passing locally and on Linux: the two
+    /// tests here that spawn a real HTTP server, and no others. Production
+    /// gives a launch 90s just to reach the port (`BIND_BUDGET`), so 15s
+    /// was the tighter number and the arbitrary one.
+    const READY_BACKSTOP: Duration = Duration::from_secs(60);
+
     #[tokio::test]
     async fn stop_without_running_process_is_false() {
         let supervisor = Supervisor::new();
@@ -832,26 +852,49 @@ http.server.HTTPServer(('127.0.0.1', 18234), H).serve_forever()
             .await
             .expect("spawn python3");
 
-        let states = tokio::time::timeout(Duration::from_secs(15), async {
-            let mut seen = Vec::new();
+        // Collected outside the timeout so a failure can say what the
+        // launch actually did. "timed out waiting for SERVING" cannot
+        // tell a slow runner apart from a server that never bound, and
+        // that is the whole question when this fails only on CI: a run
+        // stuck on `Binding` never reached the port, while one that
+        // reported `Loading` was simply not given long enough.
+        let seen = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+        let collector = std::sync::Arc::clone(&seen);
+
+        let reached = tokio::time::timeout(READY_BACKSTOP, async move {
             while let Some(event) = rx.recv().await {
                 if let UiEvent::LlamaStatus(snapshot) = event {
                     let state = snapshot.state.clone();
-                    seen.push(state.clone());
+                    collector
+                        .lock()
+                        .expect("states")
+                        .push((state.clone(), snapshot.phase));
                     if state == ServerState::Serving {
-                        return seen;
+                        return true;
                     }
                 }
             }
-            seen
+            false
         })
-        .await;
+        .await
+        .unwrap_or(false);
 
         supervisor.stop().await;
 
-        let states = states.expect("timed out waiting for SERVING");
-        assert_eq!(states.first(), Some(&ServerState::Starting));
-        assert_eq!(states.last(), Some(&ServerState::Serving));
+        let states = seen.lock().expect("states").clone();
+        assert!(
+            reached,
+            "never reached SERVING in {}s; saw {states:?}",
+            READY_BACKSTOP.as_secs()
+        );
+        assert_eq!(
+            states.first().map(|(state, _)| state),
+            Some(&ServerState::Starting)
+        );
+        assert_eq!(
+            states.last().map(|(state, _)| state),
+            Some(&ServerState::Serving)
+        );
     }
 
     fn always_ok_server(port: u16) -> Vec<String> {
@@ -873,12 +916,16 @@ http.server.HTTPServer(('127.0.0.1', {port}), H).serve_forever()
     /// Drains status events into an `App` until it reaches `target`, so a
     /// test can assert on what the *UI* ends up showing rather than on the
     /// raw event stream.
+    ///
+    /// On failure the caller reports the state the app was left in — see
+    /// `READY_BACKSTOP`: which state it stalled in is what tells a slow
+    /// runner apart from a server that never came up.
     async fn drive_until(
         app: &mut crate::app::App,
         rx: &mut mpsc::UnboundedReceiver<UiEvent>,
         target: ServerState,
     ) -> bool {
-        tokio::time::timeout(Duration::from_secs(15), async {
+        tokio::time::timeout(READY_BACKSTOP, async {
             while let Some(event) = rx.recv().await {
                 let is_status = matches!(event, UiEvent::LlamaStatus(_));
                 app.update(event);
@@ -927,7 +974,9 @@ http.server.HTTPServer(('127.0.0.1', {port}), H).serve_forever()
             .expect("spawn first");
         assert!(
             drive_until(&mut app, &mut rx, ServerState::Serving).await,
-            "first model never reached SERVING"
+            "first model never reached SERVING; stalled in {:?} ({})",
+            app.llama.server.state,
+            app.llama.server.phase.label().unwrap_or_default()
         );
         assert_eq!(app.llama.server.model.as_deref(), Some("gemma4-12b"));
 
@@ -935,7 +984,8 @@ http.server.HTTPServer(('127.0.0.1', {port}), H).serve_forever()
         supervisor.stop_announced(&tx).await;
         assert!(
             drive_until(&mut app, &mut rx, ServerState::Off).await,
-            "stop never reached OFF"
+            "stop never reached OFF; stalled in {:?}",
+            app.llama.server.state
         );
         assert_eq!(
             app.llama.server.model, None,
@@ -957,7 +1007,9 @@ http.server.HTTPServer(('127.0.0.1', {port}), H).serve_forever()
             .expect("spawn second");
         assert!(
             drive_until(&mut app, &mut rx, ServerState::Serving).await,
-            "second model never left STARTING"
+            "second model never left STARTING; stalled in {:?} ({})",
+            app.llama.server.state,
+            app.llama.server.phase.label().unwrap_or_default()
         );
 
         assert_eq!(app.llama.server.model.as_deref(), Some("qwen3-coder"));
