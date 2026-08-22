@@ -9,6 +9,12 @@ cargo-dist-version = "0.32.0"
 rust-toolchain-version = "stable"
 # CI backends to support
 ci = "github"
+# release.yml is hand-edited: its actions are pinned to commit SHAs and its
+# permissions are narrowed per job. Without this, `dist plan` fails the release
+# with "has out of date contents". The tradeoff is that dist no longer refreshes
+# the file either, so a dist upgrade means regenerating it deliberately and
+# re-applying both changes.
+allow-dirty = ["ci"]
 # The installers to generate for each app
 installers = ["homebrew"]
 # A GitHub repo to push Homebrew formulas to

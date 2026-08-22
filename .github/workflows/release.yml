@@ -4,8 +4,10 @@
 # mutable tag. This job checks out the tap with HOMEBREW_TAP_TOKEN and keeps that
 # credential on disk, so a retagged upstream action would inherit write access to
 # jrenno-kantic/homebrew-tap. Re-running `dist init` regenerates this file and
-# reverts the pins -- and the narrowed per-job `permissions:` blocks below.
-# Re-apply both before pushing a release tag.
+# would revert the pins and the narrowed per-job `permissions:` blocks below, so
+# dist-workspace.toml sets allow-dirty = ["ci"] to stop dist from rewriting or
+# rejecting this file. Consequence: dist will not refresh it either. On a dist
+# upgrade, regenerate deliberately and re-apply both changes.
 #
 # Copyright 2022-2024, axodotdev
 # SPDX-License-Identifier: MIT or Apache-2.0
